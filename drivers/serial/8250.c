@@ -39,6 +39,7 @@
 #include <linux/nmi.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <mach/board-ventana-misc.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -313,7 +314,7 @@ static const struct serial8250_config uart_config[] = {
 		.tx_loadsz	= 8,
 		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_T_TRIG_01 |
 				  UART_FCR_R_TRIG_01,
-		.flags		= UART_CAP_FIFO,
+		.flags		= UART_CAP_FIFO | UART_CAP_HW_CTSRTS,
 	},
 };
 
@@ -1837,8 +1838,13 @@ static void serial8250_set_mctrl(struct uart_port *port, unsigned int mctrl)
 	struct uart_8250_port *up = (struct uart_8250_port *)port;
 	unsigned char mcr = 0;
 
-	if (mctrl & TIOCM_RTS)
-		mcr |= UART_MCR_RTS;
+	if (up->port.type == PORT_TEGRA) {
+		if (mctrl & TIOCM_RTS)
+			mcr |= UART_MCR_HW_RTS;
+	} else {
+		if (mctrl & TIOCM_RTS)
+			mcr |= UART_MCR_RTS;
+	}
 	if (mctrl & TIOCM_DTR)
 		mcr |= UART_MCR_DTR;
 	if (mctrl & TIOCM_OUT1)
@@ -2386,6 +2392,20 @@ serial8250_do_set_termios(struct uart_port *port, struct ktermios *termios,
 		serial_outp(up, UART_LCR, 0xBF);
 		serial_outp(up, UART_EFR, efr);
 	}
+
+	if (up->capabilities & UART_CAP_HW_CTSRTS) {
+		unsigned char mcr = serial_inp(up, UART_MCR);
+		/*
+		 * TEGRA UART core support the auto control of the RTS and CTS
+		 * flow control.
+		 */
+		if (termios->c_cflag & CRTSCTS)
+			mcr |= UART_MCR_HW_CTS;
+		else
+			mcr &= ~UART_MCR_HW_CTS;
+		serial_outp(up, UART_MCR, mcr);
+	}
+
 
 #ifdef CONFIG_ARCH_OMAP
 	/* Workaround to enable 115200 baud on OMAP1510 internal ports */
@@ -3209,6 +3229,10 @@ void serial8250_unregister_port(int line)
 {
 	struct uart_8250_port *uart = &serial8250_ports[line];
 
+	//WARN: Add a workaround for ISR release on specific IRQ
+	if (ASUSGetProjectID() == 103)
+		serial8250_shutdown((struct uart_port *)uart);
+
 	mutex_lock(&serial_mutex);
 	uart_remove_one_port(&serial8250_reg, &uart->port);
 	if (serial8250_isa_devs) {
@@ -3222,6 +3246,12 @@ void serial8250_unregister_port(int line)
 	mutex_unlock(&serial_mutex);
 }
 EXPORT_SYMBOL(serial8250_unregister_port);
+
+void serial8250_console_unregister(void)
+{
+	unregister_console(&serial8250_console);
+}
+EXPORT_SYMBOL(serial8250_console_unregister);
 
 static int __init serial8250_init(void)
 {

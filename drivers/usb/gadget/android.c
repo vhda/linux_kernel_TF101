@@ -368,6 +368,8 @@ static int android_bind(struct usb_composite_dev *cdev)
 	else{
 		strcpy(desc_interface_name, USB_PRODUCT_NAME);
 	}
+
+	cdev->desc.idVendor = device_desc.idVendor;
 	cdev->desc.idProduct = device_desc.idProduct;
 
 	return 0;
@@ -468,8 +470,11 @@ void android_enable_function(struct usb_function *f, int enable)
 		else{
 			strcpy(desc_interface_name, USB_PRODUCT_NAME);
 		}
-		if (dev->cdev)
+
+		if (dev->cdev) {
+			dev->cdev->desc.idVendor = device_desc.idVendor;
 			dev->cdev->desc.idProduct = device_desc.idProduct;
+		}
 		usb_composite_force_reset(dev->cdev);
 	}
 }

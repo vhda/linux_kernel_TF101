@@ -31,6 +31,9 @@
 #include <mach/clk.h>
 #include <mach/pinmux.h>
 
+#include <linux/gpio.h>
+#include "../../../arch/arm/mach-tegra/gpio-names.h"
+
 #define TEGRA_I2C_TIMEOUT			(msecs_to_jiffies(1000))
 #define TEGRA_I2C_RETRIES			3
 #define BYTES_PER_FIFO_WORD			4
@@ -42,8 +45,10 @@
 #define I2C_STATUS				0x01C
 #define I2C_STATUS_BUSY				(1<<8)
 #define I2C_SL_CNFG				0x020
+#define I2C_SL_CNFG_NACK			(1<<1)
 #define I2C_SL_CNFG_NEWSL			(1<<2)
-#define I2C_SL_ADDR1				0x02c
+#define I2C_SL_ADDR1 				0x02c
+#define I2C_SL_ADDR2 				0x030
 #define I2C_TX_FIFO				0x050
 #define I2C_RX_FIFO				0x054
 #define I2C_PACKET_TRANSFER_STATUS		0x058
@@ -99,6 +104,10 @@
 #define I2C_HEADER_MASTER_ADDR_SHIFT		12
 #define I2C_HEADER_SLAVE_ADDR_SHIFT		1
 
+#define SL_ADDR1(addr) (addr & 0xff)
+#define SL_ADDR2(addr) ((addr >> 8) & 0xff)
+#define RETRY_MAX (9*8+1) /*I2C controller supports eight-byte burst transfer*/
+
 struct tegra_i2c_dev;
 
 struct tegra_i2c_bus {
@@ -120,6 +129,7 @@ struct tegra_i2c_dev {
 	int irq;
 	bool irq_disabled;
 	int is_dvc;
+	bool is_slave;
 	struct completion msg_complete;
 	int msg_err;
 	u8 *msg_buf;
@@ -136,6 +146,7 @@ struct tegra_i2c_dev {
 	const struct tegra_pingroup_config *last_mux;
 	int last_mux_len;
 	unsigned long last_bus_clk;
+	u16 slave_addr;
 	struct tegra_i2c_bus busses[1];
 };
 
@@ -307,6 +318,20 @@ static void tegra_dvc_init(struct tegra_i2c_dev *i2c_dev)
 	dvc_writel(i2c_dev, val, DVC_CTRL_REG1);
 }
 
+static void tegra_i2c_slave_init(struct tegra_i2c_dev *i2c_dev)
+{
+	u32 val = I2C_SL_CNFG_NEWSL | I2C_SL_CNFG_NACK;
+
+	i2c_writel(i2c_dev, val, I2C_SL_CNFG);
+
+	if (i2c_dev->slave_addr) {
+		u16 addr = i2c_dev->slave_addr;
+
+		i2c_writel(i2c_dev, SL_ADDR1(addr), I2C_SL_ADDR1);
+		i2c_writel(i2c_dev, SL_ADDR2(addr), I2C_SL_ADDR2);
+	}
+}
+
 static int tegra_i2c_init(struct tegra_i2c_dev *i2c_dev)
 {
 	u32 val;
@@ -329,6 +354,9 @@ static int tegra_i2c_init(struct tegra_i2c_dev *i2c_dev)
 	val = 7 << I2C_FIFO_CONTROL_TX_TRIG_SHIFT |
 		0 << I2C_FIFO_CONTROL_RX_TRIG_SHIFT;
 	i2c_writel(i2c_dev, val, I2C_FIFO_CONTROL);
+
+	if (i2c_dev->is_slave)
+		tegra_i2c_slave_init(i2c_dev);
 
 	if (tegra_i2c_flush_fifos(i2c_dev))
 		err = -ETIMEDOUT;
@@ -462,6 +490,8 @@ static int tegra_i2c_xfer_msg(struct tegra_i2c_bus *i2c_bus,
 	struct tegra_i2c_dev *i2c_dev = i2c_bus->dev;
 	u32 int_mask;
 	int ret;
+	int re_try_count;
+	int recovered_successfully = 0;
 
 	tegra_i2c_flush_fifos(i2c_dev);
 	i2c_writel(i2c_dev, 0xFF, I2C_INT_STATUS);
@@ -526,6 +556,52 @@ static int tegra_i2c_xfer_msg(struct tegra_i2c_bus *i2c_bus,
 
 	if (likely(i2c_dev->msg_err == I2C_ERR_NONE))
 		return 0;
+
+	/*nv - reset scl if arbitration lost*/
+	if (i2c_dev->msg_err == I2C_ERR_ARBITRATION_LOST && i2c_bus->adapter.nr == 0) {
+		tegra_gpio_enable(TEGRA_GPIO_PC4);
+		gpio_request(TEGRA_GPIO_PC4,"gen1_scl_gpio");
+		tegra_gpio_enable(TEGRA_GPIO_PC5);
+		gpio_request(TEGRA_GPIO_PC5,"gen1_sda_gpio");
+		gpio_direction_input(TEGRA_GPIO_PC5);
+
+		for (re_try_count = RETRY_MAX; re_try_count--;) {
+			gpio_direction_output(TEGRA_GPIO_PC4,0);
+			udelay(5);
+			gpio_direction_output(TEGRA_GPIO_PC4,1);
+			udelay(5);
+
+			/*chcek whether sda stuck low released*/
+			if (gpio_get_value(TEGRA_GPIO_PC5)) {
+				/*send START*/
+				gpio_direction_output(TEGRA_GPIO_PC5,0);
+				udelay(5);
+
+				/*and the STOP in the next clock cycle*/
+				gpio_direction_output(TEGRA_GPIO_PC4,0);
+				udelay(5);
+				gpio_direction_output(TEGRA_GPIO_PC4,1);
+				udelay(5);
+				gpio_direction_output(TEGRA_GPIO_PC5,1);
+				udelay(5);
+
+				recovered_successfully = 1;
+				break;
+			}
+		}
+
+		gpio_free(TEGRA_GPIO_PC4);
+		tegra_gpio_disable(TEGRA_GPIO_PC4);
+		gpio_free(TEGRA_GPIO_PC5);
+		tegra_gpio_disable(TEGRA_GPIO_PC5);
+
+		if (likely(recovered_successfully)) {
+			pr_err("I2C arbitration lost recovered by re-try-count = %08x.\n", RETRY_MAX - re_try_count);
+			return -EAGAIN;
+		} else
+			pr_err("Un-recovered I2C arbitration lost.\n");
+	}
+
 
 	tegra_i2c_init(i2c_dev);
 	if (i2c_dev->msg_err == I2C_ERR_NO_ACK) {
@@ -685,8 +761,12 @@ static int tegra_i2c_probe(struct platform_device *pdev)
 	i2c_dev->msgs_num = 0;
 	rt_mutex_init(&i2c_dev->dev_lock);
 
+	i2c_dev->slave_addr = plat->slave_addr;
 	i2c_dev->is_dvc = plat->is_dvc;
 	init_completion(&i2c_dev->msg_complete);
+
+	if (irq == INT_I2C || irq == INT_I2C2 || irq == INT_I2C3)
+		i2c_dev->is_slave = true;
 
 	platform_set_drvdata(pdev, i2c_dev);
 
@@ -772,8 +852,9 @@ static int tegra_i2c_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
-static int tegra_i2c_suspend(struct platform_device *pdev, pm_message_t state)
+static int tegra_i2c_suspend_noirq(struct device *dev)
 {
+	struct platform_device *pdev = to_platform_device(dev);
 	struct tegra_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	rt_mutex_lock(&i2c_dev->dev_lock);
@@ -782,8 +863,9 @@ static int tegra_i2c_suspend(struct platform_device *pdev, pm_message_t state)
 	return 0;
 }
 
-static int tegra_i2c_resume(struct platform_device *pdev)
+static int tegra_i2c_resume_noirq(struct device *dev)
 {
+	struct platform_device *pdev = to_platform_device(dev);
 	struct tegra_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 	int ret;
 
@@ -801,18 +883,23 @@ static int tegra_i2c_resume(struct platform_device *pdev)
 	rt_mutex_unlock(&i2c_dev->dev_lock);
 	return 0;
 }
+
+static const struct dev_pm_ops tegra_i2c_dev_pm_ops = {
+	.suspend_noirq = tegra_i2c_suspend_noirq,
+	.resume_noirq = tegra_i2c_resume_noirq,
+};
+#define TEGRA_I2C_DEV_PM_OPS (&tegra_i2c_dev_pm_ops)
+#else
+#define TEGRA_I2C_DEV_PM_OPS NULL
 #endif
 
 static struct platform_driver tegra_i2c_driver = {
 	.probe   = tegra_i2c_probe,
 	.remove  = tegra_i2c_remove,
-#ifdef CONFIG_PM
-	.suspend = tegra_i2c_suspend,
-	.resume  = tegra_i2c_resume,
-#endif
 	.driver  = {
 		.name  = "tegra-i2c",
 		.owner = THIS_MODULE,
+		.pm    = TEGRA_I2C_DEV_PM_OPS,
 	},
 };
 

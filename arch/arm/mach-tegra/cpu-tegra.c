@@ -309,7 +309,6 @@ static int tegra_pm_notify(struct notifier_block *nb, unsigned long event,
 static struct notifier_block tegra_cpu_pm_notifier = {
 	.notifier_call = tegra_pm_notify,
 };
-
 static int tegra_cpu_init(struct cpufreq_policy *policy)
 {
 	if (policy->cpu >= NUM_CPUS)

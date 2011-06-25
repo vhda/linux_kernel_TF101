@@ -47,7 +47,6 @@ static struct clk *vi_clk;
 static struct clk *vi_sensor_clk;
 static struct clk *csus_clk;
 static struct clk *csi_clk;
-static struct regulator *tegra_camera_regulator_csi;
 
 static unsigned int caminfo;
 
@@ -80,22 +79,12 @@ static int tegra_camera_disable_vi(void)
 
 static int tegra_camera_enable_csi(void)
 {
-	int ret;
-
-	ret = regulator_enable(tegra_camera_regulator_csi);
-	if (ret)
-		return ret;
 	clk_enable(csi_clk);
 	return 0;
 }
 
 static int tegra_camera_disable_csi(void)
 {
-	int ret;
-
-	ret = regulator_disable(tegra_camera_regulator_csi);
-	if (ret)
-		return ret;
 	clk_disable(csi_clk);
 	return 0;
 }
@@ -335,11 +324,6 @@ static int tegra_camera_probe(struct platform_device *pdev)
 	int err;
 
 	pr_info("%s: probe\n", TEGRA_CAMERA_NAME);
-	tegra_camera_regulator_csi = regulator_get(&pdev->dev, "vcsi");
-	if (IS_ERR_OR_NULL(tegra_camera_regulator_csi)) {
-		pr_err("%s: Couldn't get regulator vcsi\n", TEGRA_CAMERA_NAME);
-		return PTR_ERR(tegra_camera_regulator_csi);
-	}
 
 	err = misc_register(&tegra_camera_device);
 	if (err) {
@@ -375,7 +359,6 @@ vi_sensor_clk_get_err:
 vi_clk_get_err:
 	clk_put(isp_clk);
 misc_register_err:
-	regulator_put(tegra_camera_regulator_csi);
 	return err;
 }
 
@@ -387,7 +370,6 @@ static int tegra_camera_remove(struct platform_device *pdev)
 	clk_put(csus_clk);
 	clk_put(csi_clk);
 
-	regulator_put(tegra_camera_regulator_csi);
 	misc_deregister(&tegra_camera_device);
 	return 0;
 }

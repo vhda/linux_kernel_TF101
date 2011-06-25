@@ -23,6 +23,10 @@
 #define GPIO_SAR_DET_3G      TEGRA_GPIO_PG1
 #define GPIO_SIM_PIN         TEGRA_GPIO_PC7
 #define GPIO_MODEM_WAKEUP    TEGRA_GPIO_PQ6
+#define GPIO_ULPI_Reset_PIN  TEGRA_GPIO_PV1
+
+#define USB_VID_PATH         "/sys/devices/platform/tegra-ehci.1/usb1/1-1/idVendor"
+#define USB_PID_PATH         "/sys/devices/platform/tegra-ehci.1/usb1/1-1/idProduct"
 
 #define NAME_SIM "sim_plug"
 

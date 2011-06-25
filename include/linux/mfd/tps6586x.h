@@ -1,6 +1,10 @@
 #ifndef __LINUX_MFD_TPS6586X_H
 #define __LINUX_MFD_TPS6586X_H
 
+#define SM0_PWM_BIT 0
+#define SM1_PWM_BIT 1
+#define SM2_PWM_BIT 2
+
 enum {
 	TPS6586X_ID_SM_0,
 	TPS6586X_ID_SM_1,
@@ -48,6 +52,24 @@ enum {
 	TPS6586X_INT_RTC_ALM2,
 };
 
+enum pwm_pfm_mode {
+	PWM_ONLY,
+	AUTO_PWM_PFM,
+	NOT_CONFIGURABLE
+};
+
+struct tps6586x_settings {
+	/* SM0, SM1 and SM2 have PWM-only and auto PWM/PFM mode */
+	enum pwm_pfm_mode sm_pwm_mode;
+};
+
+enum {
+	TPS6586X_RTC_CL_SEL_1_5PF  = 0x0,
+	TPS6586X_RTC_CL_SEL_6_5PF  = 0x1,
+	TPS6586X_RTC_CL_SEL_7_5PF  = 0x2,
+	TPS6586X_RTC_CL_SEL_12_5PF = 0x3,
+};
+
 struct tps6586x_subdev_info {
 	int		id;
 	const char	*name;
@@ -66,6 +88,7 @@ struct tps6586x_epoch_start {
 struct tps6586x_rtc_platform_data {
 	int irq;
 	struct tps6586x_epoch_start start;
+	int cl_sel; /* internal XTAL capacitance, see TPS6586X_RTC_CL_SEL* */
 };
 
 struct tps6586x_platform_data {

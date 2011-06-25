@@ -470,8 +470,10 @@ struct file_operations prox_lds6202_fops = {
 static int prox_lds6202_suspend(struct i2c_client *client, pm_message_t mesg)
 {
 	PROX_SENSOR_INFO("\n");
+	printk("prox_lds6202_suspend+");
 	cancel_work_sync(&pxy_work);
 	flush_workqueue(prox_wq);
+	printk("prox_lds6202_suspend-");
 	return 0;
 }
 
@@ -484,7 +486,9 @@ static int prox_lds6202_suspend(struct i2c_client *client, pm_message_t mesg)
 static int prox_lds6202_resume(struct i2c_client *client)
 {
 	PROX_SENSOR_INFO("\n");
+	printk("prox_lds6202_resume+");
 	queue_work(prox_wq, &pxy_work);
+	printk("prox_lds6202_resume-");
 	return 0;
 }
 

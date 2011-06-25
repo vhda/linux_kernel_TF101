@@ -82,7 +82,7 @@
 #define TEGRA_GPIO_PS2			146 // AP_WAKE
 #define TEGRA_GPIO_PS3			147 // EC_REQUEST
 #define TEGRA_GPIO_PX5			189 // DOCK_IN	LOW: dock-in, HIGH: dock disconnected
-
+#define TEGRA_GPIO_PS4			148 // HALL_SENSOR, SW_LID
 //-----------------------------------------
 #define ASUSEC_KEY_TOUCHPAD		KEY_F2
 #define ASUSEC_KEY_AUTOBRIGHT	KEY_F3
@@ -184,6 +184,7 @@
 /************* SMI event ********************/
 #define ASUSEC_SMI_HANDSHAKING		0x50
 #define ASUSEC_SMI_WAKE				0x53
+#define ASUSEC_SMI_RESET			0x5F
 /*************IO control setting***************/
 #define ASUSEC_IOCTL_HEAVY	2
 #define ASUSEC_IOCTL_NORMAL	1
@@ -192,17 +193,16 @@
 #define ASUSEC_CPAS_LED_OFF	0
 #define ASUSEC_TP_ON	1
 #define ASUSEC_TP_OFF	0
+#define ASUSEC_EC_ON	1
+#define ASUSEC_EC_OFF	0
 #define ASUSEC_IOC_MAGIC	0xf4
-#define ASUSEC_IOC_MAXNR	5
+#define ASUSEC_IOC_MAXNR	6
 #define ASUSEC_POLLING_DATA _IOR(ASUSEC_IOC_MAGIC,	1,	int)
 #define ASUSEC_FW_UPDATE 	_IOR(ASUSEC_IOC_MAGIC,	2,	int)
 #define ASUSEC_CPASLOCK_LED	_IOR(ASUSEC_IOC_MAGIC,	3,	int)
 #define ASUSEC_INIT			_IOR(ASUSEC_IOC_MAGIC,	4,	int)
 #define ASUSEC_TP_CONTROL	_IOR(ASUSEC_IOC_MAGIC,	5,	int)
-
-
-
-
+#define ASUSEC_EC_WAKEUP	_IOR(ASUSEC_IOC_MAGIC,	6,	int)
 
 /*************IO control setting***************/
 
@@ -265,6 +265,7 @@ struct asusec_chip {
 	struct mutex		input_lock;
 	struct mutex		dock_init_lock;
 	struct wake_lock 	wake_lock;
+	struct wake_lock 	wake_lock_init;
 	struct delayed_work asusec_work;
 	struct delayed_work asusec_dock_init_work;
 	struct delayed_work asusec_fw_update_work;
@@ -288,6 +289,7 @@ struct asusec_chip {
 	int touchpad_member;
 	char ec_model_name[32];
 	char ec_version[32];
+	char dock_pid[32];
 	int polling_rate;
 	int dock_in;	// 0: without dock, 1: with dock
 	int op_mode;	// 0: normal mode, 1: fw update mode	
@@ -300,6 +302,9 @@ struct asusec_chip {
 	int wakeup_lcd;		// 0 : keep lcd state 1: make lcd on
 	int tp_wait_ack;	// 0 : normal mode, 1: waiting for an ACK
 	int tp_enable;		// 0 : touchpad has not enabled, 1: touchpad has enabled
+	int re_init;		// 0 : first time init, not re-init, 1: in re-init procedure
+	int ec_wakeup;		// 0 : ec shutdown when PAD in LP0, 1 : keep ec active when PAD in LP0,
+	int ap_wake_wakeup;	// 0 : no ap_wake wakeup signal, 1: get ap_wake wakeup signal
 };
 
 #endif

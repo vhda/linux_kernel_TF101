@@ -32,6 +32,7 @@
 #include <asm/uaccess.h>
 #include <../arch/arm/mach-tegra/gpio-names.h>
 #include <mach/board-ventana-misc.h>
+#include <linux/rtc.h>
 
 /*
  * compiler option
@@ -49,6 +50,10 @@
 
 #define GPIOKEYS_ERR(format, arg...)	\
 	printk(KERN_ERR "gpio-keys: [%s] " format , __FUNCTION__ , ## arg)
+
+#define DATA_LOGS		"/data/logs"
+#define DATA_LOGS_RAMDUMP	"/data/logs/f_shutdown"
+#define DATA_MEDIA_RAMDUMP	"/data/media/f_shutdown"
 
 //-----------------------------------------	   
 
@@ -76,9 +81,73 @@ struct gpio_keys_platform_data *g_pdata;
 struct platform_device *g_pdev;
 struct gpio_keys_drvdata *g_ddata;
 struct input_dev *g_input;
+
+static struct timer_list power_key_timer;
+static int power_key_ramdump_flag = 0;
+static char rd_log_file[256];
+static char rd_kernel_time[256];
+static struct timespec ts;
+static struct rtc_time tm;
+struct work_struct power_key_work;
+static int user_build;
+
+extern int console_none_on_cmdline;
+extern char *auto_dump_log_buf_ptr;
 extern int asusec_open_keyboard(void);
 extern int asusec_close_keyboard(void);
+extern int asusec_dock_resume(void);
 
+static void ramdump_get_time(void){
+	getnstimeofday(&ts);
+	rtc_time_to_tm(ts.tv_sec, &tm);
+	sprintf(rd_kernel_time, "%d-%02d-%02d-%02d%02d%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+static void gpio_keys_power_key_func(struct work_struct *work){
+	mm_segment_t old_fs;
+	char temp[1024];
+	char *p;
+	struct file *fp;
+	int i;
+
+	if (power_key_ramdump_flag){
+		printk(KERN_INFO "Start to ramdump\n");
+		fp = filp_open(DATA_LOGS , O_RDONLY, S_IRWXU|S_IRWXG|S_IRWXO);
+
+		if(PTR_ERR(fp) == -ENOENT){
+			strcpy(rd_log_file, DATA_MEDIA_RAMDUMP);
+		} else{
+			filp_close(fp,NULL);
+			strcpy(rd_log_file, DATA_LOGS_RAMDUMP);
+		}
+
+		ramdump_get_time();
+		strcat(rd_log_file, rd_kernel_time);
+		strcat(rd_log_file,".log");
+		printk(KERN_INFO "ramdump file: %s\n", rd_log_file);
+
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+
+		p = (char *) auto_dump_log_buf_ptr;
+		fp = filp_open(rd_log_file , O_APPEND | O_RDWR | O_CREAT, S_IRWXU|S_IRWXG|S_IRWXO);
+		if (fp == NULL){
+			set_fs(old_fs);
+			return ;
+		}
+
+		vfs_write(fp, p, 128*1024, &fp->f_pos);
+		filp_close(fp,NULL);
+		set_fs(old_fs);
+		emergency_sync();
+		printk(KERN_INFO "ramdump file: %s\n", rd_log_file);
+	}
+
+}
+
+static void gpio_keys_ramdump(unsigned long data){
+	queue_work(gpiokey_workqueue, &power_key_work);
+}
 
 /*
  * SYSFS interface for enabling/disabling keys and switches:
@@ -369,6 +438,12 @@ static void gpio_keys_report_event(struct gpio_button_data *bdata)
 		else
 			asusec_open_keyboard();
 	}
+	else if ((type == EV_SW) && (ASUSGetProjectID() == 101)){
+		if (state == 1){
+			GPIOKEYS_INFO("call asusec_dock_resume\n");
+			asusec_dock_resume();
+		}
+	}
 }
 
 static void gpio_keys_work_func(struct work_struct *work)
@@ -392,11 +467,34 @@ static irqreturn_t gpio_keys_isr(int irq, void *dev_id)
 	struct gpio_button_data *bdata = dev_id;
 	struct gpio_keys_button *button = bdata->button;
 
-	BUG_ON(irq != gpio_to_irq(button->gpio));
-        if( button->code == KEY_POWER ){
-		printk("type = %d, code = %d\n", button->type, button->code);
-       }
-	if (bdata->timer_debounce)
+	BUG_ON(irq != gpio_to_irq(button->gpio));	
+
+	if( button->code == KEY_POWER ){
+		struct input_dev *input = bdata->input;
+		unsigned int type = button->type;
+		int state = (gpio_get_value(button->gpio) ? 1 : 0) ^ button->active_low;
+		static int old_state = 0;
+
+		if (user_build == 0){
+			if (state){
+				power_key_ramdump_flag = 1;
+				mod_timer(&power_key_timer,jiffies+(HZ * 4));
+			} else {
+				power_key_ramdump_flag = 0;
+				del_timer_sync(&power_key_timer);
+			}
+		}
+		if(!!old_state && !!state){
+			printk("  gpio_keys_isr send state 1 \n" );
+			input_event(input, type, button->code, 1);
+			input_sync(input);
+		}
+		old_state=state;
+		printk(" type = %d, code = %d state =%x\n", button->type, button->code,state  );
+		input_event(input, type, button->code, !!state);
+		input_sync(input);
+	}
+	else if (bdata->timer_debounce)
 		mod_timer(&bdata->timer,
 			jiffies + msecs_to_jiffies(bdata->timer_debounce));
 	else
@@ -579,6 +677,10 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 
 	device_init_wakeup(&pdev->dev, wakeup);
 
+	INIT_WORK(&power_key_work, gpio_keys_power_key_func);
+	init_timer(&power_key_timer);
+	power_key_timer.function= gpio_keys_ramdump;
+	user_build = console_none_on_cmdline;
 	return 0;
 
  fail3:

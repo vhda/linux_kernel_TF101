@@ -26,8 +26,6 @@
 
 #include "../debug_mmc.h"
 
-extern unsigned long wake_status;
-
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
 	0,		0,		0,		0

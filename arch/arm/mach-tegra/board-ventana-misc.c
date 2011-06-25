@@ -17,9 +17,11 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
+#include <linux/gpio.h>
 
 #include <mach/board-ventana-misc.h>
 #include <mach/tegra2_fuse.h>
+#include "gpio-names.h"
 
 #define VENTANA_MISC_ATTR(module) \
 static struct kobj_attribute module##_attr = { \
@@ -144,6 +146,63 @@ static ssize_t ventana_projectid_show(struct kobject *kobj,
 	return (s - buf);
 }
 
+extern void serial8250_console_unregister();
+extern struct platform_device tegra_uartd_device;
+extern struct platform_device debug_uart;
+extern int console_none_on_cmdline;
+static int first_attempt = 1;
+extern unsigned int g_NvBootArgsGPSPreemption;
+
+/*
+ * Export a interface to user space for GPS function/debug console switch.
+ *
+ * The procedure will check if the target platform is JN101(EP103) and
+ * "console=none" is no specified in kernel cmdline.
+ * After that, check the input param and GPS preemption ATAG passed by boot
+ * loader. If input param is "OFF" and GPS preemption ATAG is specified,
+ * release UARTD interface and register with GPS for further usage forever.
+ */
+static ssize_t ventana_debug_store(struct kobject *kobj,
+	struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	int ret = count;
+
+	if (ASUSGetProjectID() != 103) {
+		pr_info("[MISC]: Refuse any params due to mismatch project\n");
+		return ret;
+	}
+
+	// return immediately if no console is specified in kernel command line
+	if (console_none_on_cmdline) {
+		pr_info("[MISC]: Debug console is already disabled\n");
+		return ret;
+	}
+
+	if (!strncmp(buf, "ON", strlen("ON"))) {
+		//put a place holder here, no implementation yet
+		//pr_info("[MISC]: Enable debug console\n");
+		//platform_device_del(&tegra_uartd_device);
+		//gpio_direction_output(TEGRA_GPIO_PS6, 1);
+		//platform_device_register(&debug_uart);
+	}
+	else if ((!strncmp(buf, "OFF", strlen("OFF"))) && first_attempt) {
+		first_attempt = 0;
+		if (!g_NvBootArgsGPSPreemption) {
+			pr_info("[MISC]: Forbid GPS preemption\n");
+			return ret;
+		}
+		pr_info("[MISC]: Disable debug console\n");
+		serial8250_console_unregister();
+		platform_device_del(&debug_uart);
+		gpio_direction_output(TEGRA_GPIO_PS6, 0);
+		platform_device_register(&tegra_uartd_device);
+	}
+	else
+		pr_err("[MISC]: Undefined commands!\n");
+
+	return ret;
+}
+
 static ssize_t ventana_fuse_reservedodm_show(struct kobject *kobj,
 	struct kobj_attribute *attr, char *buf)
 {
@@ -171,11 +230,20 @@ VENTANA_MISC_ATTR(ventana_chipid);
 VENTANA_MISC_ATTR(ventana_projectid);
 VENTANA_MISC_ATTR(ventana_fuse_reservedodm);
 
+static struct kobj_attribute ventana_debug_attr = {
+	.attr = {
+		.name = __stringify(ventana_debug),
+		.mode = 0220,
+	},
+	.store = ventana_debug_store,
+};
+
 static struct attribute *attr_list[] = {
 	&ventana_hw_attr.attr,
 	&ventana_chipid_attr.attr,
 	&ventana_projectid_attr.attr,
 	&ventana_fuse_reservedodm_attr.attr,
+	&ventana_debug_attr.attr,
 	NULL,
 };
 

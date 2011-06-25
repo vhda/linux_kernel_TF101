@@ -96,7 +96,7 @@ static int access_calibration_file(void)
 			&data[22]);
 
 		printk("%d %d %d\n", data[19], data[20], data[21]);
-		if((data[19] != 100) ||
+		if((data[19] > 150) || (data[19] < 50) ||
 		   (data[20] > 150) || (data[20] < 50) ||
 		   (data[21] > 150) || (data[21] < 50)){
 			gain_x = 100;

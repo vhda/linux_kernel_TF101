@@ -610,7 +610,6 @@ struct file_operations tps6586x_fops = {
 	.unlocked_ioctl =   tps6586x_ioctl,
 	.open =  tps6586x_open,
 };
-
 //========================================
 static int __devinit tps6586x_i2c_probe(struct i2c_client *client,
 					const struct i2c_device_id *id)
@@ -642,7 +641,6 @@ static int __devinit tps6586x_i2c_probe(struct i2c_client *client,
 	i2c_set_clientdata(client, tps6586x);
 
 	mutex_init(&tps6586x->lock);
-
 	if (client->irq) {
 		ret = tps6586x_irq_init(tps6586x, client->irq,
 					pdata->irq_base);

@@ -109,7 +109,6 @@ static int dmp_start(struct mldl_cfg *pdata, void *mlsl_handle)
 				       ((userCtrlReg & (~BIT_FIFO_EN))
 						|   BIT_FIFO_RST));
 	ERROR_CHECK(result);
-
 	result = MLSLSerialWriteSingle(mlsl_handle, pdata->addr,
 				       MPUREG_USER_CTRL, userCtrlReg);
 	ERROR_CHECK(result);
@@ -1592,6 +1591,7 @@ int mpu3050_suspend(struct mldl_cfg *mldl_cfg,
  *              mode of some sort).
  *  @return  ML_SUCCESS or a non-zero error code.
  */
+
 int mpu3050_shutdown(struct mldl_cfg *mldl_cfg,
 		    void *gyro_handle,
 		    void *accel_handle,

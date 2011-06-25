@@ -398,7 +398,10 @@ writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 				 * retrying writeback of the dirty page/inode
 				 * that cannot be performed immediately.
 				 */
-				redirty_tail(inode);
+				if(inode_to_bdi(inode) == NULL)
+					printk("%s bdi is NULL\n", __func__);
+				else
+					redirty_tail(inode);
 			}
 		} else if (inode->i_state & I_DIRTY) {
 			/*

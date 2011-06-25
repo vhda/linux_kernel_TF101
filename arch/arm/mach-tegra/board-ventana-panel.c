@@ -75,14 +75,18 @@ static int ventana_backlight_notify(struct device *unused, int brightness)
 	return brightness;
 }
 
+static int ventana_disp1_check_fb(struct device *dev, struct fb_info *info);
+
 static struct platform_pwm_backlight_data ventana_backlight_data = {
 	.pwm_id		= 2,
 	.max_brightness	= 255,
-	.dft_brightness	= 102,
+	.dft_brightness	= 157,
 	.pwm_period_ns	= 4000000, /* TODO: HSD: PWM= 225 ~ 275 Hz */
 	.init		= ventana_backlight_init,
 	.exit		= ventana_backlight_exit,
 	.notify		= ventana_backlight_notify,
+	/* Only toggle backlight on fb blank notifications for disp1 */
+	.check_fb   = ventana_disp1_check_fb,
 };
 
 static struct platform_device ventana_backlight_device = {
@@ -99,6 +103,11 @@ static struct platform_device ventana_backlight_device = {
  */
 static int ventana_panel_enable(void)
 {
+	struct regulator *reg = regulator_get(NULL, "vdd_ldo4");
+
+	regulator_enable(reg);
+	regulator_put(reg);
+
 	gpio_set_value(ventana_pnl_pwr_enb, 1);
 	gpio_set_value(ventana_lvds_shutdown, 1);
 	return 0;
@@ -190,9 +199,9 @@ static struct resource ventana_disp2_resources[] = {
 
 static struct tegra_dc_mode ventana_panel_modes[] = {
 	{
-		/* Warning.
-		 * The real LCD pclk will be replaced in tegra_dc_probe(). */
-		.pclk = 83800000,
+                /* Warning.
+                 * The real LCD pclk will be replaced in tegra_dc_probe(). */
+                .pclk = 83800000,
 		.h_ref_to_sync = 11,
 		.v_ref_to_sync = 1,
 		.h_sync_width = 58,
@@ -225,13 +234,8 @@ static struct tegra_dc_out ventana_disp1_out = {
 
 	.align		= TEGRA_DC_ALIGN_MSB,
 	.order		= TEGRA_DC_ORDER_RED_BLUE,
-
-	/* Enable dither for HannStar LCD.
-	 * HannStar supports RGB666, but fb pixel format is RGBA8888.
-	 * So, enable dither control to avoid contour effect.
-	 */
 	.depth		= 18,
-	.dither		= TEGRA_DC_ERRDIFF_DITHER,
+	.dither		= TEGRA_DC_ORDERED_DITHER,
 
 	.modes	 	= ventana_panel_modes,
 	.n_modes 	= ARRAY_SIZE(ventana_panel_modes),
@@ -275,6 +279,11 @@ static struct nvhost_device ventana_disp1_device = {
 		.platform_data = &ventana_disp1_pdata,
 	},
 };
+
+static int ventana_disp1_check_fb(struct device *dev, struct fb_info *info)
+{
+	return info->device == &ventana_disp1_device.dev;
+}
 
 static struct nvhost_device ventana_disp2_device = {
 	.name		= "tegradc",

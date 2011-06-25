@@ -18,8 +18,9 @@ ifeq ($(CONFIG_TEGRA_ALSA),y)
 obj-$(CONFIG_ARCH_TEGRA_2x_SOC)         += tegra2_i2s.o
 else
 obj-y                                   += tegra_i2s_audio.o
-endif
 obj-y                                   += tegra_spdif_audio.o
+endif
+obj-y                                   += spdif.o
 obj-y                                   += tegra_das.o
 obj-y                                   += mc.o
 obj-$(CONFIG_USB_SUPPORT)               += usb_phy.o
@@ -48,8 +49,11 @@ obj-$(CONFIG_CPU_FREQ)                  += cpu-tegra.o
 obj-$(CONFIG_CPU_IDLE)                  += cpuidle.o
 obj-$(CONFIG_TEGRA_IOVMM)               += iovmm.o
 obj-$(CONFIG_TEGRA_IOVMM_GART)          += iovmm-gart.o
+obj-$(CONFIG_TEGRA_MC_PROFILE)          += tegra2_mc.o
 
 obj-y                                   += nv/
+
+obj-${CONFIG_TEGRA_SPI_SLAVE}		+= spi_tegra_slave.o
 
 obj-${CONFIG_MACH_HARMONY}              += board-harmony.o
 obj-${CONFIG_MACH_HARMONY}              += board-harmony-pinmux.o
@@ -75,3 +79,4 @@ obj-${CONFIG_MACH_WHISTLER}             += board-whistler-panel.o
 obj-${CONFIG_MACH_WHISTLER}             += board-whistler-sensors.o
 obj-${CONFIG_MACH_WHISTLER}             += board-whistler-kbc.o
 obj-${CONFIG_MACH_WHISTLER}             += board-whistler-baseband.o
+obj-${CONFIG_MACH_WHISTLER}             += board-whistler-memory.o

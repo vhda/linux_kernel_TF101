@@ -56,6 +56,28 @@
 #include "board.h"
 #include "power.h"
 
+#ifdef CONFIG_TRUSTED_FOUNDATIONS
+void callGenericSMC(u32 param0, u32 param1, u32 param2)
+{
+	__asm__ volatile(
+		"mov r0, %2\n"
+		"mov r1, %3\n"
+		"mov r2, %4\n"
+		"mov r3, #0\n"
+		"mov r4, #0\n"
+		".word    0xe1600070              @ SMC 0\n"
+		"mov %0, r0\n"
+		"mov %1, r1\n"
+		: "=r" (param0), "=r" (param1)
+		: "r" (param0), "r" (param1),
+		  "r" (param2)
+		: "r0", "r1", "r2", "r3", "r4");
+}
+u32 buffer_rdv[64];
+#endif
+
+/**************** END TL *********************/
+
 struct suspend_context {
 	/*
 	 * The next 7 values are referenced by offset in __restart_plls
@@ -379,6 +401,11 @@ unsigned int tegra_suspend_lp2(unsigned int us)
 	outer_flush_range(__pa(&tegra_sctx),__pa(&tegra_sctx+1));
 	barrier();
 
+#ifdef CONFIG_TRUSTED_FOUNDATIONS
+// TRUSTED LOGIC SMC_STOP/Save State
+	callGenericSMC(0xFFFFFFFC, 0xFFFFFFE4, virt_to_phys(buffer_rdv));
+#endif
+
 	__cortex_a9_save(mode);
 	/* return from __cortex_a9_restore */
 	barrier();
@@ -462,6 +489,10 @@ static void tegra_suspend_dram(bool do_lp0)
 	l2x0_shutdown();
 #endif
 
+#ifdef CONFIG_TRUSTED_FOUNDATIONS
+// TRUSTED LOGIC SMC_STOP/Save State
+	callGenericSMC(0xFFFFFFFC, 0xFFFFFFE3, virt_to_phys(buffer_rdv));
+#endif
 	__cortex_a9_save(mode);
 	restore_cpu_complex();
 
@@ -572,6 +603,12 @@ static void tegra_debug_uart_resume(void)
 #define MC_SECURITY_SIZE	0x70
 #define MC_SECURITY_CFG2	0x7c
 unsigned long wake_status=0;
+unsigned long temp_wake_status=0;
+unsigned long sd_wake_status=0;
+extern struct timer_list suspend_timer;
+extern void suspend_worker_timeout(unsigned long data);
+extern void watchdog_enable(int sec);
+extern void watchdog_disable(void);
 static int tegra_suspend_enter(suspend_state_t state)
 {
 	struct irq_desc *desc;
@@ -598,6 +635,11 @@ static int tegra_suspend_enter(suspend_state_t state)
 	local_irq_save(flags);
 	local_fiq_disable();
 
+        if(lp_state==0){
+		watchdog_disable();
+		del_timer_sync(&suspend_timer);
+		destroy_timer_on_stack(&suspend_timer);
+        }
 	pr_info("Entering suspend state LP%d\n", lp_state);
 	if (do_lp0) {
 		tegra_irq_suspend();
@@ -616,7 +658,7 @@ static int tegra_suspend_enter(suspend_state_t state)
 	for_each_irq_desc(irq, desc) {
 		if ((desc->status & IRQ_WAKEUP) &&
 		    (desc->status & IRQ_SUSPENDED) &&
-		    (get_irq_chip(irq)->unmask)){
+		    (get_irq_chip(irq)->unmask)) {
 			get_irq_chip(irq)->unmask(irq);
 		}
 	}
@@ -631,9 +673,9 @@ static int tegra_suspend_enter(suspend_state_t state)
 	rtc_after = tegra_rtc_read_ms();
 
 	for_each_irq_desc(irq, desc) {
-		  if ((desc->status & IRQ_WAKEUP) &&
+		if ((desc->status & IRQ_WAKEUP) &&
 		    (desc->status & IRQ_SUSPENDED) &&
-		    (get_irq_chip(irq)->unmask)) {
+		    (get_irq_chip(irq)->mask)) {
 			get_irq_chip(irq)->mask(irq);
 		}
 	}
@@ -663,18 +705,47 @@ static int tegra_suspend_enter(suspend_state_t state)
 	pr_info("Suspended for %llu.%03u seconds\n", secs, ms);
 
 	 wake_status = readl(pmc + PMC_WAKE_STATUS);
+	sd_wake_status = readl(pmc + PMC_WAKE_STATUS);
+	 temp_wake_status=wake_status;
 	   printk("exit suspend: wake_source=%x\n",wake_status );
 
 	tegra_time_in_suspend[time_to_bin(secs)]++;
 
 	local_fiq_enable();
 	local_irq_restore(flags);
-
+        if(lp_state==0){
+		init_timer_on_stack(&suspend_timer);
+		suspend_timer.expires = jiffies + HZ * 8;
+		suspend_timer.function = suspend_worker_timeout;
+		add_timer(&suspend_timer);
+		watchdog_enable(10);
+     }
 	return 0;
+}
+
+/*
+ * Function pointers to optional board specific function
+ */
+void (*tegra_deep_sleep)(int);
+EXPORT_SYMBOL(tegra_deep_sleep);
+
+static int tegra_suspend_prepare(void)
+{
+	if ((current_suspend_mode == TEGRA_SUSPEND_LP0) && tegra_deep_sleep)
+		tegra_deep_sleep(1);
+	return 0;
+}
+
+static void tegra_suspend_finish(void)
+{
+	if ((current_suspend_mode == TEGRA_SUSPEND_LP0) && tegra_deep_sleep)
+		tegra_deep_sleep(0);
 }
 
 static struct platform_suspend_ops tegra_suspend_ops = {
 	.valid		= suspend_valid_only_mem,
+	.prepare	= tegra_suspend_prepare,
+	.finish		= tegra_suspend_finish,
 	.begin		= tegra_suspend_begin,
 	.prepare_late	= tegra_suspend_prepare_late,
 	.wake		= tegra_suspend_wake,

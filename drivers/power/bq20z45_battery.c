@@ -40,8 +40,7 @@
 #define SMBUS_RETRY                                     (3)
 #define GPIOPIN_LOW_BATTERY_DETECT	  TEGRA_GPIO_PW3
 #define GPIOPIN_BATTERY_DETECT	         TEGRA_GPIO_PI3
-#define BATTERY_POLLING_RATE                    (30)
-#define BATTERY_ERROR_POLLING_RATE        (300)
+#define BATTERY_POLLING_RATE                    (60)
 #define EP101_RESERVE_CAPACITY                             (6920)
 #define EP101_FULL_CAPACITY                                   (8326)
 #define EP102_RESERVE_CAPACITY                             (9000)
@@ -161,13 +160,16 @@ void check_cabe_type(void)
 		 ac_on = 1 ;
 	        usb_on = 0;
 	}
+	else if(battery_cable_status  == USB_Cable){
+		usb_on = 1;
+		 if(battery_docking_status)
+			ac_on = 1;
+		 else
+			ac_on = 0;
+	}
 	else if(battery_docking_status){
 		 ac_on = 1 ;
 	        usb_on = 0;
-	}
-	else if(battery_cable_status  == USB_Cable){
-		ac_on = 0 ;
-		usb_on = 1;
 	}
 	else{
 		ac_on = 0 ;
@@ -323,15 +325,11 @@ static void battery_status_poll(struct work_struct *work)
 	  //printk("battery_status_poll\n");
 	//kobject_uevent(&bq20z45_supply.dev->kobj, KOBJ_CHANGE);
 	power_supply_changed(&bq20z45_supply[Charger_Type_Battery]);
-	power_supply_changed(&bq20z45_supply[Charger_Type_AC]);
-	#ifndef REMOVE_USB_POWER_SUPPLY
-	power_supply_changed(&bq20z45_supply[Charger_Type_USB]);
-	#endif
 	
 	/* Schedule next poll */
        bq20z45_device->battery_present =!(gpio_get_value(bq20z45_device->gpio_battery_detect));
-	if(ready_to_polling)
-	queue_delayed_work(battery_work_queue, &battery_device->status_poll_work,  bq20z45_device->battery_present ?BATTERY_POLLING_RATE*HZ:BATTERY_ERROR_POLLING_RATE*HZ);
+	if(ready_to_polling &&  bq20z45_device->battery_present)
+		queue_delayed_work(battery_work_queue, &battery_device->status_poll_work,BATTERY_POLLING_RATE*HZ);
 }
 
 
@@ -339,6 +337,8 @@ static irqreturn_t battery_detect_isr(int irq, void *dev_id)
 {
 	bq20z45_device->battery_present =!(gpio_get_value(bq20z45_device->gpio_battery_detect));
 	printk("battery_detect_isr battery %s \n",bq20z45_device->battery_present?"instered":"removed" );
+	if(ready_to_polling && bq20z45_device->battery_present)
+		queue_delayed_work(battery_work_queue, &bq20z45_device->status_poll_work, BATTERY_POLLING_RATE*HZ);
 	return IRQ_HANDLED;
 }
 
@@ -893,6 +893,7 @@ static int bq20z45_suspend(struct i2c_client *client,
 
 /* any smbus transaction will wake up bq20z45 */
 extern unsigned long wake_status;
+extern unsigned long temp_wake_status;
 static int bq20z45_resume(struct i2c_client *client)
 {
       #define LOW_BATTERY_WAKESOURCE_PAD TEGRA_WAKE_GPIO_PW3
@@ -901,14 +902,17 @@ static int bq20z45_resume(struct i2c_client *client)
       cancel_delayed_work(&bq20z45_device->status_poll_work);
       if(!gpio_get_value(TEGRA_GPIO_PX5) && !gpio_get_value(TEGRA_GPIO_PS1))
 	  battery_docking_status=true;
+	  else
+		battery_docking_status=false;
 
-	if(wake_status&TEGRA_WAKE_USB1_VBUS){
+	if(temp_wake_status&TEGRA_WAKE_USB1_VBUS){
+		temp_wake_status&=(~TEGRA_WAKE_USB1_VBUS);
 		battery_cable_status = get_usb_cable_status();
 		check_cabe_type();
 		if ( ac_on )
 			power_supply_changed(&bq20z45_supply[Charger_Type_AC]);
 		#ifndef REMOVE_USB_POWER_SUPPLY
-		else if ( usb_on )
+		 if ( usb_on )
 			power_supply_changed(&bq20z45_supply[Charger_Type_USB]);
 		#endif
 	}
@@ -1083,18 +1087,23 @@ void battery_callback(unsigned usb_cable_state)
       battery_cable_status = usb_cable_state ;
 	if(!battery_driver_ready)
 		return;
+
+       wake_lock_timeout(&bq20z45_device->cable_event_wake_lock, 2*HZ);
 	if(! battery_cable_status){
 		if ( old_cable_status == USB_AC_Adapter){
-                       wake_lock_timeout(&bq20z45_device->cable_event_wake_lock, 2*HZ);
 			power_supply_changed(&bq20z45_supply[Charger_Type_AC]);
 		}
 		#ifndef REMOVE_USB_POWER_SUPPLY
 		else if ( old_cable_status == USB_Cable){
-			wake_lock_timeout(&bq20z45_device->cable_event_wake_lock, 2*HZ);
 			power_supply_changed(&bq20z45_supply[Charger_Type_USB]);
 		}
 		#endif
+	}else if ( battery_cable_status == USB_Cable){
+		power_supply_changed(&bq20z45_supply[Charger_Type_USB]);
+	}else if ( battery_cable_status == USB_AC_Adapter){
+		power_supply_changed(&bq20z45_supply[Charger_Type_AC]);
 	}
+
          if(battery_work_queue ){
 		 cancel_delayed_work(&bq20z45_device->status_poll_work);
 		 cancel_delayed_work(&bq20z45_device->charger_control);

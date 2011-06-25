@@ -18,6 +18,7 @@
 #include <asm/gpio.h>
 #include <asm/ioctl.h>
 #include <asm/uaccess.h>
+#include <linux/power_supply.h>
 #include <mach/board-ventana-misc.h>
 
 #include "asusec.h"
@@ -49,7 +50,15 @@ static ssize_t asusec_info_show(struct device *class,
 		struct device_attribute *attr,char *buf);
 static ssize_t asusec_store_led(struct device *class,
 		struct device_attribute *attr,const char *buf, size_t count);
+static ssize_t asusec_store_ec_wakeup(struct device *class,
+		struct device_attribute *attr,const char *buf, size_t count);
 static ssize_t asusec_show_drain(struct device *class,
+		struct device_attribute *attr,char *buf);
+static ssize_t asusec_show_dock_battery(struct device *class,
+		struct device_attribute *attr,char *buf);
+static ssize_t asusec_show_dock_battery_all(struct device *class,
+		struct device_attribute *attr,char *buf);
+static ssize_t asusec_show_dock_control_flag(struct device *class,
 		struct device_attribute *attr,char *buf);
 
 
@@ -71,6 +80,11 @@ static int asusec_input_device_create(struct i2c_client *client);
 static ssize_t asusec_switch_name(struct switch_dev *sdev, char *buf);
 static ssize_t asusec_switch_state(struct switch_dev *sdev, char *buf);
 static int asusec_event(struct input_dev *dev, unsigned int type, unsigned int code, int value);	
+static int asusec_dock_battery_get_capacity(union power_supply_propval *val);
+static int asusec_dock_battery_get_status(union power_supply_propval *val);
+static int asusec_dock_battery_get_property(struct power_supply *psy,
+	enum power_supply_property psp,
+	union power_supply_propval *val);
 
 /*
  * global variable
@@ -97,6 +111,21 @@ struct delayed_work asusec_stress_work;
 static const struct i2c_device_id asusec_id[] = {
 	{"asusec", 0},
 	{}
+};
+
+static enum power_supply_property asusec_dock_properties[] = {
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_CAPACITY,
+};
+
+static struct power_supply asusec_power_supply[] = {
+	{
+		.name		= "dock_battery",
+		.type		= POWER_SUPPLY_TYPE_DOCK_BATTERY,
+		.properties	= asusec_dock_properties,
+		.num_properties	= ARRAY_SIZE(asusec_dock_properties),
+		.get_property	= asusec_dock_battery_get_property,
+	},
 };
 
 MODULE_DEVICE_TABLE(i2c, asusec_id);
@@ -128,15 +157,22 @@ static DEVICE_ATTR(ec_status, S_IWUSR | S_IRUGO, asusec_show,NULL);
 static DEVICE_ATTR(ec_info, S_IWUSR | S_IRUGO, asusec_info_show,NULL);
 static DEVICE_ATTR(ec_dock, S_IWUSR | S_IRUGO, asusec_show_dock,NULL);
 static DEVICE_ATTR(ec_dock_led, S_IWUSR | S_IRUGO, NULL,asusec_store_led);
+static DEVICE_ATTR(ec_wakeup, S_IWUSR | S_IRUGO, NULL,asusec_store_ec_wakeup);
 static DEVICE_ATTR(ec_dock_discharge, S_IWUSR | S_IRUGO, asusec_show_drain,NULL);
-
+static DEVICE_ATTR(ec_dock_battery, S_IWUSR | S_IRUGO, asusec_show_dock_battery,NULL);
+static DEVICE_ATTR(ec_dock_battery_all, S_IWUSR | S_IRUGO, asusec_show_dock_battery_all,NULL);
+static DEVICE_ATTR(ec_dock_control_flag, S_IWUSR | S_IRUGO, asusec_show_dock_control_flag,NULL);
 
 static struct attribute *asusec_smbus_attributes[] = {
 	&dev_attr_ec_status.attr,
 	&dev_attr_ec_info.attr,
 	&dev_attr_ec_dock.attr,
 	&dev_attr_ec_dock_led.attr,
+	&dev_attr_ec_wakeup.attr,
 	&dev_attr_ec_dock_discharge.attr,
+	&dev_attr_ec_dock_battery.attr,
+	&dev_attr_ec_dock_battery_all.attr,
+	&dev_attr_ec_dock_control_flag.attr,
 NULL
 };
 
@@ -328,6 +364,7 @@ static int asusec_touchpad_enable(struct i2c_client *client)
 {
 	ec_chip->tp_wait_ack = 1;		
 	asusec_i2c_write_data(client, 0xF4D4);
+	return 0;
 }
 
 static int asusec_touchpad_disable(struct i2c_client *client)
@@ -372,6 +409,117 @@ touchpad_reset_ok:
 	return 0;
 }
 */
+
+static void asusec_fw_clear_buf(void){
+	int i;
+
+	for (i = 0; i < 64; i++){
+		i2c_smbus_read_byte_data(&dockram_client, 0);
+	}
+}
+
+static void asusec_fw_reset_ec_op(void){
+	char i2c_data[32];
+	int i;
+	int r_data[32];
+
+	asusec_fw_clear_buf();
+	
+	i2c_data[0] = 0x01;
+	i2c_data[1] = 0x21;
+	for (i = 0; i < i2c_data[0]+1 ; i++){
+		i2c_smbus_write_byte_data(&dockram_client, i2c_data[i],0);
+	}
+	msleep(CONVERSION_TIME_MS*4);
+}
+
+static void asusec_fw_address_set_op(void){
+	char i2c_data[32];
+	int i;
+	int r_data[32];
+
+	asusec_fw_clear_buf();
+
+	i2c_data[0] = 0x05;
+	i2c_data[1] = 0xa0;
+	i2c_data[2] = 0x00;
+	i2c_data[3] = 0x00;
+	i2c_data[4] = 0x02;
+	i2c_data[5] = 0x00;
+	for (i = 0; i < i2c_data[0]+1 ; i++){
+		i2c_smbus_write_byte_data(&dockram_client, i2c_data[i],0);
+	}
+	msleep(CONVERSION_TIME_MS*4);
+}
+
+static void asusec_fw_enter_op(void){
+	char i2c_data[32];
+	int i;
+	int r_data[32];
+
+	asusec_fw_clear_buf();
+
+	i2c_data[0] = 0x05;
+	i2c_data[1] = 0x10;
+	i2c_data[2] = 0x55;
+	i2c_data[3] = 0xaa;
+	i2c_data[4] = 0xcd;
+	i2c_data[5] = 0xbe;
+	for (i = 0; i < i2c_data[0]+1 ; i++){
+		i2c_smbus_write_byte_data(&dockram_client, i2c_data[i],0);
+	}
+	msleep(CONVERSION_TIME_MS*4);
+}
+
+static int asusec_fw_cmp_id(void){
+	char i2c_data[32];
+	int i;
+	int r_data[32];
+	int ret_val = 0;
+
+	asusec_fw_clear_buf();
+
+	i2c_data[0] = 0x01;
+	i2c_data[1] = 0xC0;
+	for (i = 0; i < i2c_data[0]+1 ; i++){
+		i2c_smbus_write_byte_data(&dockram_client, i2c_data[i],0);
+	}
+	msleep(CONVERSION_TIME_MS*10);
+
+	for (i = 0; i < 5; i++){
+		r_data[i] = i2c_smbus_read_byte_data(&dockram_client, 0);
+	}
+
+	for (i = 0; i < 5; i++){
+		ASUSEC_NOTICE("r_data[%d] = 0x%x\n", i, r_data[i]);
+	}
+
+	if (r_data[0] == 0xfa &&
+		r_data[1] == 0xf0 &&
+		r_data[2] == 0x12 &&
+		r_data[3] == 0xef &&
+		r_data[4] == 0x12){
+		ret_val = 0;
+	} else {
+		ret_val = 1;
+	}
+
+	return ret_val;
+}
+
+static void asusec_fw_reset(void){
+
+	if (asusec_fw_cmp_id() == 0){
+		asusec_fw_enter_op();
+		asusec_fw_address_set_op();
+		asusec_fw_reset_ec_op();
+		asusec_fw_clear_buf();
+		if (ec_chip->re_init == 0){
+			queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, HZ/2);
+			ec_chip->re_init = 1;
+		}
+	}
+}
 static int asusec_i2c_test(struct i2c_client *client){
 	return asusec_i2c_write_data(client, 0x0000);
 }
@@ -392,6 +540,13 @@ static int asusec_is_init_running(void){
 	mutex_unlock(&ec_chip->dock_init_lock);
 	return ret_val;
 }
+
+static void asusec_clear_i2c_buffer(struct i2c_client *client){
+	int i;
+	for ( i=0; i<8; i++){
+		asusec_i2c_read_data(client);
+	}
+}
 static int asusec_chip_init(struct i2c_client *client)
 {
 	int ret_val = 0;
@@ -401,7 +556,9 @@ static int asusec_chip_init(struct i2c_client *client)
 		return 0;
 	}	
 
+	wake_lock(&ec_chip->wake_lock);
 	strcpy(ec_chip->ec_model_name, " \n");
+	strcpy(ec_chip->ec_version, " \n");
 	disable_irq_nosync(client->irq);
 
 	ec_chip->op_mode = 0;
@@ -441,14 +598,16 @@ static int asusec_chip_init(struct i2c_client *client)
 	if (asusec_dockram_read_data(0x04) < 0){
 		goto fail_to_access_ec;
 	}
-	ASUSEC_INFO("PCBA Version: %s\n", ec_chip->i2c_dm_data);
+	strcpy(ec_chip->dock_pid, &ec_chip->i2c_dm_data[1]);
+	ASUSEC_INFO("PID Version: %s\n", ec_chip->dock_pid);
 
 	if(asusec_input_device_create(client)){
 		goto fail_to_access_ec;
 	}
 
-	wake_lock(&ec_chip->wake_lock);
 	if (ASUSGetProjectID()==101){
+		msleep(750);
+		asusec_clear_i2c_buffer(client);
 		asusec_touchpad_disable(client);
 	}
 
@@ -457,9 +616,9 @@ static int asusec_chip_init(struct i2c_client *client)
 #if TOUCHPAD_ELAN
 #if TOUCHPAD_MODE
 	if (ASUSGetProjectID()==101){
-		msleep(300);
+		asusec_clear_i2c_buffer(client);
 		if ((!elantech_detect(ec_chip)) && (!elantech_init(ec_chip))){
-			ec_chip->touchpad_member = ELANTOUCHPAD;
+		    ec_chip->touchpad_member = ELANTOUCHPAD;
 		} else {
 			ec_chip->touchpad_member = -1;
 		}
@@ -472,9 +631,7 @@ static int asusec_chip_init(struct i2c_client *client)
 	ec_chip->d_index = 0;
 
 	asusec_keypad_enable(client);
-	for ( i=0; i<8; i++){
-		asusec_i2c_read_data(client);
-	}
+	asusec_clear_i2c_buffer(client);
 	
 	enable_irq(client->irq);
 	ec_chip->init_success = 1;
@@ -492,8 +649,10 @@ fail_to_access_ec:
 		ec_chip->dock_in = 0;
 	} else {
 		ASUSEC_NOTICE("Need EC FW update\n");
+		asusec_fw_reset();
 	}
 	enable_irq(client->irq);
+	wake_unlock(&ec_chip->wake_lock);
 	return -1;
 
 }
@@ -511,6 +670,7 @@ static irqreturn_t asusec_interrupt_handler(int irq, void *dev_id){
 		else{
 			if (ec_chip->suspend_state){
 				ec_chip->wakeup_lcd = 1;
+				ec_chip->ap_wake_wakeup = 1;
 			}
 			queue_delayed_work(asusec_wq, &ec_chip->asusec_work, 0);
 		}
@@ -1009,7 +1169,7 @@ static void asusec_touchpad_processing(void){
 }
 
 static void asusec_kp_wake(void){
-	ASUSEC_NOTICE("ASUSEC WAKE");
+	ASUSEC_NOTICE("ASUSEC WAKE\n");
 	if (asusec_input_device_create(ec_chip->client)){
 		return ;
 	}
@@ -1021,8 +1181,15 @@ static void asusec_kp_wake(void){
 
 static void asusec_kp_smi(void){
 	if (ec_chip->i2c_data[2] == ASUSEC_SMI_HANDSHAKING){
-		ASUSEC_NOTICE("ASUSEC_SMI_HANDSHAKING");
+		ASUSEC_NOTICE("ASUSEC_SMI_HANDSHAKING\n");
 		asusec_chip_init(ec_chip->client);
+	} else if (ec_chip->i2c_data[2] == ASUSEC_SMI_RESET){
+		ASUSEC_NOTICE("ASUSEC_SMI_RESET\n");
+		ec_chip->init_success = 0;
+		asusec_dock_init_work_function(NULL);
+	} else if (ec_chip->i2c_data[2] == ASUSEC_SMI_WAKE){
+		asusec_kp_wake();
+		ASUSEC_NOTICE("ASUSEC_SMI_WAKE\n");
 	}
 }
 
@@ -1139,8 +1306,10 @@ static void asusec_dock_init_work_function(struct work_struct *dat)
 	int d_counter = 0;
 	int gpio_state = 0;
 	ASUSEC_INFO("Dock-init function\n");
+
+	wake_lock(&ec_chip->wake_lock_init);
 	if (ASUSGetProjectID()==101){
-		ASUSEC_INFO("EP101 dock-init\n");
+		ASUSEC_NOTICE("EP101 dock-init\n");
 		if (ec_chip->dock_det){
 			gpio_state = gpio_get_value(gpio);
 			for(i = 0; i < 40; i++){
@@ -1157,6 +1326,7 @@ static void asusec_dock_init_work_function(struct work_struct *dat)
 			}
 			docking_callback();
 			ec_chip->dock_det--;
+			ec_chip->re_init = 0;
 		}
 		
 		mutex_lock(&ec_chip->input_lock);
@@ -1176,10 +1346,15 @@ static void asusec_dock_init_work_function(struct work_struct *dat)
 		} else{
 			ASUSEC_NOTICE("Dock detected\n");
 			ec_chip->dock_in = 1;
-			if(ec_chip->init_success == 0){
-				asusec_reset_dock();
-				msleep(200);
-				asusec_chip_init(ec_chip->client);
+			if (gpio_get_value(TEGRA_GPIO_PS4) || (!ec_chip->status)){
+				if (ec_chip->init_success == 0){
+					msleep(400);
+					asusec_reset_dock();
+					msleep(200);
+					asusec_chip_init(ec_chip->client);
+				}
+			} else {
+				ASUSEC_NOTICE("Keyboard is closed\n");
 			}
 		}
 		switch_set_state(&ec_chip->dock_sdev, ec_chip->dock_in ? 10 : 0);
@@ -1194,6 +1369,7 @@ static void asusec_dock_init_work_function(struct work_struct *dat)
 			asusec_chip_init(ec_chip->client);
 		}
 	}
+	wake_unlock(&ec_chip->wake_lock_init);
 }
 
 static void asusec_fw_update_work_function(struct work_struct *dat)
@@ -1218,10 +1394,12 @@ static void asusec_work_function(struct work_struct *dat)
 	int ret_val = 0;
 
 	if (ec_chip->wakeup_lcd){
-		wake_lock_timeout(&ec_chip->wake_lock, 3*HZ);
-		asusec_kp_wake();
-		ec_chip->wakeup_lcd = 0;
-		msleep(500);
+		if (gpio_get_value(TEGRA_GPIO_PS4)){
+			ec_chip->wakeup_lcd = 0;
+			ec_chip->dock_in = gpio_get_value(TEGRA_GPIO_PX5) ? 0 : 1;
+			wake_lock_timeout(&ec_chip->wake_lock, 3*HZ);
+			msleep(500);
+		}
 	}
 
 	ret_val = asusec_i2c_read_data(ec_chip->client);
@@ -1234,6 +1412,7 @@ static void asusec_work_function(struct work_struct *dat)
 	if (ec_chip->i2c_data[1] & ASUSEC_OBF_MASK){		// ec data is valid
 		if (ec_chip->i2c_data[1] & ASUSEC_SMI_MASK){	// ec data is from touchpad
 			asusec_kp_smi();
+			return ;
 		}
 	}	
 
@@ -1368,7 +1547,10 @@ static int __devinit asusec_probe(struct i2c_client *client,
 
 	init_timer(&ec_chip->asusec_timer);
 	ec_chip->asusec_timer.function = asusec_reset_counter;
-	
+
+	wake_lock_init(&ec_chip->wake_lock, WAKE_LOCK_SUSPEND, "asusec_wake");
+	wake_lock_init(&ec_chip->wake_lock_init, WAKE_LOCK_SUSPEND, "asusec_wake_init");
+
 	ec_chip->status = 0;
 	ec_chip->dock_det = 0;
 	ec_chip->dock_in = 0;
@@ -1379,6 +1561,8 @@ static int __devinit asusec_probe(struct i2c_client *client,
 	ec_chip->wakeup_lcd = 0;
 	ec_chip->tp_wait_ack = 0;
 	ec_chip->tp_enable = 1;
+	ec_chip->re_init = 0;
+	ec_chip->ec_wakeup = 0;
 	ec_chip->indev = NULL;
 	ec_chip->private->abs_dev = NULL;
 	asusec_dockram_init(client);
@@ -1392,19 +1576,12 @@ static int __devinit asusec_probe(struct i2c_client *client,
 		ASUSEC_ERR("switch_dev_register for dock failed!\n");
 		goto exit;
 	}
+	switch_set_state(&ec_chip->dock_sdev, 0);
 
-	switch (ASUSGetProjectID()) {
-	case 101:
-		switch_set_state(&ec_chip->dock_sdev, ec_chip->dock_in ? 10 : 0);
-		break;
-	case 102:
-		switch_set_state(&ec_chip->dock_sdev, 0);
-		break;
-	case 103:
-		switch_set_state(&ec_chip->dock_sdev, 0);
-		break;
-	default:
-		switch_set_state(&ec_chip->dock_sdev, 0);
+	err = power_supply_register(&client->dev, &asusec_power_supply[0]);
+	if (err){
+		ASUSEC_ERR("fail to register power supply for dock\n");
+		goto exit;
 	}
 	
 	asusec_wq = create_singlethread_workqueue("asusec_wq");
@@ -1427,9 +1604,7 @@ static int __devinit asusec_probe(struct i2c_client *client,
 	if (ec_chip->status){
 		queue_delayed_work(asusec_wq, &(ec_chip->asusec_work), HZ/ASUSEC_POLLING_RATE);
 	}
-#endif
-
-	wake_lock_init(&ec_chip->wake_lock, WAKE_LOCK_SUSPEND, "asusec_wake");
+#endif	
 
 	return 0;
 
@@ -1474,6 +1649,21 @@ static ssize_t asusec_store_led(struct device *class,struct device_attribute *at
 	
 	return 0 ;
 }
+
+static ssize_t asusec_store_ec_wakeup(struct device *class,struct device_attribute *attr,const char *buf, size_t count)
+{
+	if (buf[0] == '0'){
+		ec_chip->ec_wakeup = 0;
+		ASUSEC_NOTICE("Set EC shutdown when PAD in LP0\n");
+	}
+	else{
+		ec_chip->ec_wakeup = 1;
+		ASUSEC_NOTICE("Keep EC active when PAD in LP0\n");
+	}
+		
+	return 0 ;
+}
+
 static ssize_t asusec_show_drain(struct device *class,struct device_attribute *attr,char *buf)
 {
 	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
@@ -1489,6 +1679,134 @@ static ssize_t asusec_show_drain(struct device *class,struct device_attribute *a
 	return 0;
 }
 
+static ssize_t asusec_show_dock_battery(struct device *class,struct device_attribute *attr,char *buf)
+{
+	int bat_percentage = 0;
+	int ret_val = 0;
+
+	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
+		ret_val = asusec_dockram_read_data(0x14);
+
+		if (ret_val < 0)
+			return sprintf(buf, "-1\n");
+		else{
+			bat_percentage = (ec_chip->i2c_dm_data[14] << 8 )| ec_chip->i2c_dm_data[13];
+			return sprintf(buf, "%d\n", bat_percentage);
+		}
+	}
+
+	return sprintf(buf, "-1\n");
+}
+
+static ssize_t asusec_show_dock_battery_all(struct device *class,struct device_attribute *attr,char *buf)
+{
+	int i = 0;
+	char temp_buf[64];
+	int ret_val = 0;
+
+	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
+		ret_val = asusec_dockram_read_data(0x14);
+
+		if (ret_val < 0)
+			return sprintf(buf, "fail to get dock-battery info\n");
+		else{
+			sprintf(temp_buf, "byte[0] = 0x%x\n", ec_chip->i2c_dm_data[i]);
+			strcpy(buf, temp_buf);
+			for (i = 1; i < 17; i++){
+				sprintf(temp_buf, "byte[%d] = 0x%x\n", i, ec_chip->i2c_dm_data[i]);
+				strcat(buf, temp_buf);
+			}
+			return strlen(buf);
+		}
+	}
+
+	return sprintf(buf, "fail to get dock-battery info\n");
+}
+
+static ssize_t asusec_show_dock_control_flag(struct device *class,struct device_attribute *attr,char *buf)
+{
+	int i = 0;
+	char temp_buf[64];
+	int ret_val = 0;
+
+	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
+		ret_val = asusec_dockram_read_data(0x0A);
+
+		if (ret_val < 0)
+			return sprintf(buf, "fail to get control-flag info\n");
+		else{
+			sprintf(temp_buf, "byte[0] = 0x%x\n", ec_chip->i2c_dm_data[i]);
+			strcpy(buf, temp_buf);
+			for (i = 1; i < 9; i++){
+				sprintf(temp_buf, "byte[%d] = 0x%x\n", i, ec_chip->i2c_dm_data[i]);
+				strcat(buf, temp_buf);
+			}
+			return strlen(buf);
+		}
+	}
+
+	return sprintf(buf, "fail to get control-flag info\n");
+}
+
+
+static void asusec_dock_info_update(void){
+	int ret_val = 0;
+	char *envp[3];
+	char name_buf[64];
+	char state_buf[64];
+	int env_offset = 0;
+	int length = 0;
+
+	if (ec_chip->ap_wake_wakeup && (gpio_get_value(TEGRA_GPIO_PX5) == 0)){
+		ec_chip->ap_wake_wakeup = 0;
+		ret_val = asusec_i2c_test(ec_chip->client);
+		if((ret_val >= 0) && (asusec_dockram_read_data(0x04) >= 0)){
+			strcpy(ec_chip->dock_pid, &ec_chip->i2c_dm_data[1]);
+			ASUSEC_NOTICE("PID Version: %s\n", ec_chip->dock_pid);
+		}
+		if ((ret_val >= 0) && (asusec_dockram_read_data(0x02) >= 0)){
+			if (ec_chip->dock_in &&
+				strncmp(ec_chip->ec_version, &ec_chip->i2c_dm_data[1], 11)){
+
+				strcpy(ec_chip->ec_version, &ec_chip->i2c_dm_data[1]);
+				ASUSEC_NOTICE("EC-FW Version: %s\n", ec_chip->ec_version);
+
+				length = strlen(ec_chip->ec_version);
+				ec_chip->ec_version[length] = NULL;
+				snprintf(name_buf, sizeof(name_buf), "SWITCH_NAME=%s", ec_chip->ec_version);
+				envp[env_offset++] = name_buf;
+
+				snprintf(state_buf, sizeof(state_buf), "SWITCH_STATE=%s", "10");
+				envp[env_offset++] = state_buf;
+
+				envp[env_offset] = NULL;
+				kobject_uevent_env(&ec_chip->dock_sdev.dev->kobj, KOBJ_CHANGE, envp);
+			}
+		}
+	}
+}
+
+static void asusec_dock_status_check(void){
+	if ((ec_chip->ec_version[6] <= '0') &&
+	    (ec_chip->ec_version[7] <= '2') &&
+	    (ec_chip->ec_version[8] <= '0') &&
+	    (ec_chip->ec_version[9] <= '9') &&
+	    (ec_chip->ec_version[10] == NULL)){
+		ec_chip->init_success = 0;
+		wake_lock(&ec_chip->wake_lock_init);
+		queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, 0);
+	} else if (gpio_get_value(TEGRA_GPIO_PX5) && ec_chip->indev){
+		ec_chip->init_success = 0;
+		wake_lock(&ec_chip->wake_lock_init);
+		queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, 0);
+	} else if (strcmp(ec_chip->dock_pid, "PCBA-EP101") == 0){
+		ec_chip->init_success = 0;
+		wake_lock(&ec_chip->wake_lock_init);
+		queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, 0);
+	}
+
+}
+
 static int asusec_suspend(struct i2c_client *client, pm_message_t mesg){
 	printk("asusec_suspend+\n");
 	printk("asusec_suspend-\n");
@@ -1496,13 +1814,35 @@ static int asusec_suspend(struct i2c_client *client, pm_message_t mesg){
 }
 
 static int asusec_resume(struct i2c_client *client){
+
 	printk("asusec_resume+\n");
+
 	ec_chip->suspend_state = 0;
-	asusec_dock_init_work_function(NULL);
+	asusec_dock_info_update();
+	asusec_dock_status_check();
+
 	printk("asusec_resume-\n");
 	return 0;	
 }
 
+static int asusec_set_wakeup_cmd(void){
+	int ret_val = 0;
+
+	if (ec_chip->dock_in){
+		ret_val = asusec_i2c_test(ec_chip->client);
+		if(ret_val >= 0){
+			asusec_dockram_read_data(0x0A);
+			ec_chip->i2c_dm_data[0] = 8;
+			if (ec_chip->ec_wakeup){
+				ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] | 0x80;
+			} else {
+				ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] & 0x7F;
+			}
+			asusec_dockram_write_data(0x0A,9);
+		}
+	}
+	return 0;
+}
 static ssize_t asusec_switch_name(struct switch_dev *sdev, char *buf)
 {
 	return sprintf(buf, "%s\n", ec_chip->ec_version);
@@ -1528,6 +1868,10 @@ static int asusec_release(struct inode *inode, struct file *flip){
 static long asusec_ioctl(struct file *flip,
 					unsigned int cmd, unsigned long arg){
 	int err = 1;
+	char *envp[3];
+	char name_buf[64];
+	int env_offset = 0;
+	int length = 0;
 
 	if (_IOC_TYPE(cmd) != ASUSEC_IOC_MAGIC)
 	 return -ENOTTY;
@@ -1584,6 +1928,14 @@ static long asusec_ioctl(struct file *flip,
 		case ASUSEC_INIT:
 			msleep(500);
 			queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, 0);
+			msleep(2500);
+			ASUSEC_NOTICE("ASUSEC_INIT - EC version: %s\n", ec_chip->ec_version);
+			length = strlen(ec_chip->ec_version);
+			ec_chip->ec_version[length] = NULL;
+			snprintf(name_buf, sizeof(name_buf), "SWITCH_NAME=%s", ec_chip->ec_version);
+			envp[env_offset++] = name_buf;
+			envp[env_offset] = NULL;
+			kobject_uevent_env(&ec_chip->dock_sdev.dev->kobj, KOBJ_CHANGE, envp);
 			break;
 		case ASUSEC_TP_CONTROL:
 			ASUSEC_NOTICE("ASUSEC_TP_CONTROL\n");
@@ -1593,6 +1945,22 @@ static long asusec_ioctl(struct file *flip,
 			}
 			else
 				return -ENOTTY;
+		case ASUSEC_EC_WAKEUP:
+			ASUSEC_NOTICE("ASUSEC_EC_WAKEUP, arg = %d\n", arg);
+			if (arg == ASUSEC_EC_OFF){
+				ec_chip->ec_wakeup = 0;
+				ASUSEC_NOTICE("Set EC shutdown when PAD in LP0\n");
+				return asusec_set_wakeup_cmd();
+			}
+			else if (arg == ASUSEC_EC_ON){
+				ec_chip->ec_wakeup = 1;
+				ASUSEC_NOTICE("Keep EC active when PAD in LP0\n");
+				return asusec_set_wakeup_cmd();
+			}
+			else {
+				ASUSEC_ERR("Unknown argument");
+				return -ENOTTY;
+			}
         default: /* redundant, as cmd was checked against MAXNR */
             return -ENOTTY;
 	}
@@ -1709,7 +2077,7 @@ static ssize_t ec_write(struct file *file, const char __user *buf, size_t count,
     for (i = 0; i < count ; i++) 
     {
 		//ASUSEC_INFO("smbus write, i = %d, data = 0x%x\n", i, host_to_ec_buffer[i]);
-		i2c_smbus_write_byte_data(&dockram_client, host_to_ec_buffer[i],0);		
+		i2c_smbus_write_byte_data(&dockram_client, host_to_ec_buffer[i],0);
     }
     h2ec_count = 0;
     //ASUSEC_INFO("ec_write done\n");
@@ -1733,10 +2101,88 @@ static int asusec_event(struct input_dev *dev, unsigned int type, unsigned int c
 	return -ENOTTY;		
 }
 
+static int asusec_dock_battery_get_capacity(union power_supply_propval *val){
+	int bat_percentage = 0;
+	int ret_val = 0;
+
+	val->intval = -1;
+	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
+		ret_val = asusec_dockram_read_data(0x14);
+
+		if (ret_val < 0){
+			return -1;
+		}
+		else {
+			bat_percentage = (ec_chip->i2c_dm_data[14] << 8 )| ec_chip->i2c_dm_data[13];
+			val->intval = bat_percentage;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static int asusec_dock_battery_get_status(union power_supply_propval *val){
+	int bat_percentage = 0;
+	int ret_val = 0;
+
+	val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
+		ret_val = asusec_dockram_read_data(0x0A);
+
+		if (ret_val < 0){
+			return -1;
+		}
+		else {
+			if (ec_chip->i2c_dm_data[1] & 0x4)
+				val->intval = POWER_SUPPLY_STATUS_CHARGING;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static int asusec_dock_battery_get_property(struct power_supply *psy,
+	enum power_supply_property psp,
+	union power_supply_propval *val)
+{
+	switch (psp) {
+		case POWER_SUPPLY_PROP_CAPACITY:
+			if(asusec_dock_battery_get_capacity(val) < 0)
+				goto error;
+			break;
+		case POWER_SUPPLY_PROP_STATUS:
+			if(asusec_dock_battery_get_status(val) < 0)
+				goto error;
+			break;
+		default:
+			return -EINVAL;
+	}
+	return 0;
+
+error:
+	return -EINVAL;
+}
+
+int asusec_dock_resume(void){
+	ASUSEC_NOTICE("keyboard opened, op_mode = %d\n", ec_chip->op_mode);
+	if (ec_chip->op_mode == 0){
+		ASUSEC_NOTICE("keyboard opened\n");
+		if (ec_chip->suspend_state == 0){
+			wake_lock(&ec_chip->wake_lock_init);
+			queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, 0);
+		}
+	}
+	return 0;
+
+}
+EXPORT_SYMBOL(asusec_dock_resume);
+
 int asusec_open_keyboard(void){
 	if ((ec_chip->suspend_state == 0) && (ec_chip->op_mode == 0)){
 		ASUSEC_NOTICE("keyboard opened\n");
-		asusec_dock_init_work_function(NULL);
+		ec_chip->init_success = 0;
+		wake_lock(&ec_chip->wake_lock_init);
+		queue_delayed_work(asusec_wq, &ec_chip->asusec_dock_init_work, 0);
 	}
 	return 0;
 	
@@ -1787,14 +2233,19 @@ int asusec_suspend_hub_callback(void){
 
 		ec_chip->i2c_dm_data[0] = 8;
 		ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] & 0xDF;
-		ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] | 0x02;		
+		ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] | 0x22;
+		if (ec_chip->ec_wakeup){
+			ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] | 0x80;
+		} else {
+			ec_chip->i2c_dm_data[5] = ec_chip->i2c_dm_data[5] & 0x7F;
+		}
 		asusec_dockram_write_data(0x0A,9);	
 	}
 	
 fail_to_access_ec:		
 	flush_workqueue(asusec_wq);
 	ec_chip->suspend_state = 1;
-	ec_chip->init_success = 0;
+	ec_chip->dock_det = 0;
 	printk("asusec_suspend_hub_callback-\n");
 	return 0;
 	
@@ -1852,6 +2303,25 @@ fail_to_access_ec:
 	return -1;
 }
 EXPORT_SYMBOL(asusec_is_battery_full_callback);
+
+int asusec_dock_battery_callback(void){
+
+	int bat_percentage = 0;
+	int ret_val = 0;
+
+	if ((ec_chip->op_mode == 0) && (ec_chip->dock_in)){
+		ret_val = asusec_dockram_read_data(0x14);
+
+		if (ret_val < 0)
+			return -1;
+		else{
+			bat_percentage = (ec_chip->i2c_dm_data[14] << 8 )| ec_chip->i2c_dm_data[13];
+			return bat_percentage;
+		}
+	}
+	return -1;
+}
+EXPORT_SYMBOL(asusec_dock_battery_callback);
 
 
 static int __init asusec_init(void)

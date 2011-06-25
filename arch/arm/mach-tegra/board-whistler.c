@@ -33,7 +33,8 @@
 #include <linux/gpio.h>
 #include <linux/gpio_scrollwheel.h>
 #include <linux/input.h>
-#include <linux/tegra_usb.h>
+#include <linux/platform_data/tegra_usb.h>
+#include <linux/mfd/max8907c.h>
 #include <linux/usb/android_composite.h>
 #include <linux/memblock.h>
 
@@ -44,6 +45,7 @@
 #include <mach/iomap.h>
 #include <mach/io.h>
 #include <mach/i2s.h>
+#include <mach/spdif.h>
 #include <mach/audio.h>
 
 #include <asm/mach-types.h>
@@ -57,13 +59,29 @@
 #include "devices.h"
 #include "gpio-names.h"
 #include "fuse.h"
+#include "board-whistler-baseband.h"
+
+static struct usb_mass_storage_platform_data tegra_usb_fsg_platform = {
+	.vendor = "NVIDIA",
+	.product = "Tegra 2",
+	.nluns = 1,
+};
+
+static struct platform_device tegra_usb_fsg_device = {
+	.name = "usb_mass_storage",
+	.id = -1,
+	.dev = {
+		.platform_data = &tegra_usb_fsg_platform,
+	},
+};
 
 static struct plat_serial8250_port debug_uart_platform_data[] = {
 	{
 		.membase	= IO_ADDRESS(TEGRA_UARTA_BASE),
 		.mapbase	= TEGRA_UARTA_BASE,
 		.irq		= INT_UARTA,
-		.flags		= UPF_BOOT_AUTOCONF,
+		.flags		= UPF_BOOT_AUTOCONF | UPF_FIXED_TYPE,
+		.type           = PORT_TEGRA,
 		.iotype		= UPIO_MEM,
 		.regshift	= 2,
 		.uartclk	= 216000000,
@@ -109,7 +127,7 @@ static inline void whistler_bt_rfkill(void) { }
 
 static struct tegra_utmip_config utmi_phy_config[] = {
 	[0] = {
-			.hssync_start_delay = 0,
+			.hssync_start_delay = 9,
 			.idle_wait_delay = 17,
 			.elastic_limit = 16,
 			.term_range_adj = 6,
@@ -118,7 +136,7 @@ static struct tegra_utmip_config utmi_phy_config[] = {
 			.xcvr_lsrslew = 2,
 		},
 	[1] = {
-			.hssync_start_delay = 0,
+			.hssync_start_delay = 9,
 			.idle_wait_delay = 17,
 			.elastic_limit = 16,
 			.term_range_adj = 6,
@@ -140,18 +158,19 @@ static __initdata struct tegra_clk_init_table whistler_clk_init_table[] = {
 	{ "uartc",	"pll_m",	600000000,	false},
 	{ "pwm",	"clk_32k",	32768,		false},
 	{ "kbc",	"clk_32k",	32768,		true},
-	{ "pll_a",	NULL,		11289600,	true},
-	{ "pll_a_out0",	NULL,		11289600,	true},
-	{ "i2s1",	"pll_a_out0",	11289600,	true},
-	{ "i2s2",	"pll_a_out0",	11289600,	true},
-	{ "audio",	"pll_a_out0",	11289600,	true},
-	{ "audio_2x",	"audio",	22579200,	true},
+	{ "pll_a",	NULL,		56448000,	false},
+	{ "pll_a_out0",	NULL,		11289600,	false},
+	{ "i2s1",	"pll_a_out0",	11289600,	false},
+	{ "i2s2",	"pll_a_out0",	11289600,	false},
+	{ "audio",	"pll_a_out0",	11289600,	false},
+	{ "audio_2x",	"audio",	22579200,	false},
+	{ "spdif_out",	"pll_a_out0",	5644800,	false},
 	{ "sdmmc2",	"pll_p",	25000000,	false},
 	{ NULL,		NULL,		0,		0},
 };
 
-static char *usb_functions[] = { "mtp" };
-static char *usb_functions_adb[] = { "mtp", "adb" };
+static char *usb_functions[] = { "mtp", "usb_mass_storage" };
+static char *usb_functions_adb[] = { "mtp", "adb", "usb_mass_storage" };
 
 static struct android_usb_product usb_products[] = {
 	{
@@ -225,50 +244,63 @@ static struct tegra_i2c_platform_data whistler_dvc_platform_data = {
 };
 
 static struct tegra_das_platform_data tegra_das_pdata = {
+	.dap_clk = "clk_dev1",
 	.tegra_dap_port_info_table = {
-		[0] = {
-			.dac_port = tegra_das_port_none,
-			.codec_type = tegra_audio_codec_type_none,
-			.device_property = {
-				.num_channels = 0,
-				.bits_per_sample = 0,
-				.rate = 0,
-				.dac_dap_data_comm_format = 0,
-			},
-		},
 		/* I2S1 <--> DAC1 <--> DAP1 <--> Hifi Codec */
-		[1] = {
+		[0] = {
 			.dac_port = tegra_das_port_i2s1,
+			.dap_port = tegra_das_port_dap1,
 			.codec_type = tegra_audio_codec_type_hifi,
 			.device_property = {
 				.num_channels = 2,
 				.bits_per_sample = 16,
 				.rate = 44100,
-				.dac_dap_data_comm_format = dac_dap_data_format_i2s,
+				.dac_dap_data_comm_format =
+						dac_dap_data_format_all,
 			},
 		},
+		/* I2S2 <--> DAC2 <--> DAP2 <--> Voice Codec */
+		[1] = {
+			.dac_port = tegra_das_port_i2s2,
+			.dap_port = tegra_das_port_dap2,
+			.codec_type = tegra_audio_codec_type_voice,
+			.device_property = {
+				.num_channels = 1,
+				.bits_per_sample = 16,
+				.rate = 8000,
+				.dac_dap_data_comm_format =
+						dac_dap_data_format_all,
+			},
+		},
+		/* I2S2 <--> DAC2 <--> DAP3 <--> Baseband Codec */
 		[2] = {
-			.dac_port = tegra_das_port_none,
-			.codec_type = tegra_audio_codec_type_none,
+			.dac_port = tegra_das_port_i2s2,
+			.dap_port = tegra_das_port_dap3,
+			.codec_type = tegra_audio_codec_type_baseband,
 			.device_property = {
-				.num_channels = 0,
-				.bits_per_sample = 0,
-				.rate = 0,
-				.dac_dap_data_comm_format = 0,
+				.num_channels = 1,
+				.bits_per_sample = 16,
+				.rate = 8000,
+				.dac_dap_data_comm_format =
+					dac_dap_data_format_dsp,
 			},
 		},
+		/* I2S2 <--> DAC2 <--> DAP4 <--> BT SCO Codec */
 		[3] = {
-			.dac_port = tegra_das_port_none,
-			.codec_type = tegra_audio_codec_type_none,
+			.dac_port = tegra_das_port_i2s2,
+			.dap_port = tegra_das_port_dap4,
+			.codec_type = tegra_audio_codec_type_bluetooth,
 			.device_property = {
-				.num_channels = 0,
-				.bits_per_sample = 0,
-				.rate = 0,
-				.dac_dap_data_comm_format = 0,
+				.num_channels = 1,
+				.bits_per_sample = 16,
+				.rate = 8000,
+				.dac_dap_data_comm_format =
+					dac_dap_data_format_dsp,
 			},
 		},
 		[4] = {
 			.dac_port = tegra_das_port_none,
+			.dap_port = tegra_das_port_none,
 			.codec_type = tegra_audio_codec_type_none,
 			.device_property = {
 				.num_channels = 0,
@@ -282,12 +314,30 @@ static struct tegra_das_platform_data tegra_das_pdata = {
 	.tegra_das_con_table = {
 		[0] = {
 			.con_id = tegra_das_port_con_id_hifi,
-			.num_entries = 4,
+			.num_entries = 2,
 			.con_line = {
 				[0] = {tegra_das_port_i2s1, tegra_das_port_dap1, true},
 				[1] = {tegra_das_port_dap1, tegra_das_port_i2s1, false},
-				[2] = {tegra_das_port_i2s2, tegra_das_port_dap4, true},
-				[3] = {tegra_das_port_dap4, tegra_das_port_i2s2, false},
+			},
+		},
+		[1] = {
+			.con_id = tegra_das_port_con_id_bt_codec,
+			.num_entries = 4,
+			.con_line = {
+				[0] = {tegra_das_port_i2s2, tegra_das_port_dap4, true},
+				[1] = {tegra_das_port_dap4, tegra_das_port_i2s2, false},
+				[2] = {tegra_das_port_i2s1, tegra_das_port_dap1, true},
+				[3] = {tegra_das_port_dap1, tegra_das_port_i2s1, false},
+			},
+		},
+		[2] = {
+			.con_id = tegra_das_port_con_id_voicecall_no_bt,
+			.num_entries = 4,
+			.con_line = {
+				[0] = {tegra_das_port_dap2, tegra_das_port_dap3, true},
+				[1] = {tegra_das_port_dap3, tegra_das_port_dap2, false},
+				[2] = {tegra_das_port_i2s1, tegra_das_port_dap1, true},
+				[3] = {tegra_das_port_dap1, tegra_das_port_i2s1, false},
 			},
 		},
 	}
@@ -306,6 +356,10 @@ static void whistler_i2c_init(void)
 	platform_device_register(&tegra_i2c_device1);
 }
 
+static struct tegra_audio_platform_data tegra_spdif_pdata = {
+	.dma_on = true,  /* use dma by default */
+	.spdif_clk_rate = 5644800,
+};
 
 static struct tegra_audio_platform_data tegra_audio_pdata[] = {
 	/* For I2S1 */
@@ -377,8 +431,8 @@ static struct platform_device tegra_camera = {
 };
 
 static struct platform_device *whistler_devices[] __initdata = {
+	&tegra_usb_fsg_device,
 	&androidusb_device,
-	&debug_uart,
 	&tegra_uartb_device,
 	&tegra_uartc_device,
 	&pmu_device,
@@ -390,10 +444,11 @@ static struct platform_device *whistler_devices[] __initdata = {
 	&tegra_camera,
 	&tegra_i2s_device1,
 	&tegra_i2s_device2,
+	&tegra_spdif_device,
 	&tegra_das_device,
 };
 
-static struct synaptics_i2c_rmi_platform_data synaptics_pdata= {
+static struct synaptics_i2c_rmi_platform_data synaptics_pdata = {
 	.flags			= SYNAPTICS_FLIP_X | SYNAPTICS_FLIP_Y | SYNAPTICS_SWAP_XY,
 	.irqflags		= IRQF_TRIGGER_LOW,
 };
@@ -408,6 +463,7 @@ static const struct i2c_board_info whistler_i2c_touch_info[] = {
 
 static int __init whistler_touch_init(void)
 {
+	tegra_gpio_enable(TEGRA_GPIO_PC6);
 	i2c_register_board_info(0, whistler_i2c_touch_info, 1);
 
 	return 0;
@@ -422,12 +478,27 @@ static int __init whistler_scroll_init(void)
 	return 0;
 }
 
+static struct usb_phy_plat_data tegra_usb_phy_pdata[] = {
+	[0] = {
+			.instance = 0,
+			.vbus_irq = MAX8907C_INT_BASE + MAX8907C_IRQ_VCHG_DC_R,
+			.vbus_gpio = TEGRA_GPIO_PN6,
+	},
+	[1] = {
+			.instance = 1,
+			.vbus_gpio = -1,
+	},
+	[2] = {
+			.instance = 2,
+			.vbus_gpio = -1,
+	},
+};
 
 static struct tegra_ehci_platform_data tegra_ehci_pdata[] = {
 	[0] = {
 			.phy_config = &utmi_phy_config[0],
 			.operating_mode = TEGRA_USB_HOST,
-			.power_down_on_bus_suspend = 0,
+			.power_down_on_bus_suspend = 1,
 		},
 	[1] = {
 			.phy_config = &ulpi_phy_config,
@@ -437,7 +508,7 @@ static struct tegra_ehci_platform_data tegra_ehci_pdata[] = {
 	[2] = {
 			.phy_config = &utmi_phy_config[1],
 			.operating_mode = TEGRA_USB_HOST,
-			.power_down_on_bus_suspend = 0,
+			.power_down_on_bus_suspend = 1,
 	},
 };
 
@@ -496,10 +567,12 @@ static struct tegra_otg_platform_data tegra_otg_pdata = {
 
 static void whistler_usb_init(void)
 {
+	tegra_usb_phy_init(tegra_usb_phy_pdata, ARRAY_SIZE(tegra_usb_phy_pdata));
+
 	tegra_otg_device.dev.platform_data = &tegra_otg_pdata;
 	platform_device_register(&tegra_otg_device);
 
-	tegra_ehci3_device.dev.platform_data=&tegra_ehci_pdata[2];
+	tegra_ehci3_device.dev.platform_data = &tegra_ehci_pdata[2];
 	platform_device_register(&tegra_ehci3_device);
 }
 
@@ -507,6 +580,22 @@ static int __init whistler_gps_init(void)
 {
 	tegra_gpio_enable(TEGRA_GPIO_PU4);
 	return 0;
+}
+
+static void whistler_power_off(void)
+{
+	int ret;
+
+	ret = max8907c_power_off();
+	if (ret)
+		pr_err("whistler: failed to power off\n");
+
+	while (1);
+}
+
+static void __init whistler_power_off_init(void)
+{
+	pm_power_off = whistler_power_off;
 }
 
 static const struct i2c_board_info whistler_codec_info[] = {
@@ -531,6 +620,11 @@ static void __init tegra_whistler_init(void)
 	andusb_plat.serial_number = kstrdup(serial, GFP_KERNEL);
 	tegra_i2s_device1.dev.platform_data = &tegra_audio_pdata[0];
 	tegra_i2s_device2.dev.platform_data = &tegra_audio_pdata[1];
+	tegra_spdif_device.dev.platform_data = &tegra_spdif_pdata;
+	if (is_tegra_debug_uartport_hs() == true)
+		platform_device_register(&tegra_uarta_device);
+	else
+		platform_device_register(&debug_uart);
 	platform_add_devices(whistler_devices, ARRAY_SIZE(whistler_devices));
 
 	tegra_das_device.dev.platform_data = &tegra_das_pdata;
@@ -546,6 +640,9 @@ static void __init tegra_whistler_init(void)
 	whistler_usb_init();
 	whistler_scroll_init();
 	whistler_codec_init();
+	whistler_power_off_init();
+	whistler_emc_init();
+	whistler_baseband_init();
 }
 
 int __init tegra_whistler_protected_aperture_init(void)

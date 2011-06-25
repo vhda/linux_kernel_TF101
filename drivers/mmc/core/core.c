@@ -48,7 +48,7 @@ static struct wake_lock mmc_delayed_work_wake_lock;
 static struct wake_lock sd_delayed_work_wake_lock;
 static struct wake_lock wifi_delayed_work_wake_lock;
 
-extern unsigned long wake_status;
+extern unsigned long sd_wake_status;
 
 /*
  * Enabling software CRCs on the data blocks can be a significant (30%)
@@ -1493,7 +1493,7 @@ void mmc_rescan(struct work_struct *work)
 	int extend_wakelock = 0;
 
        if(host != NULL)
-              MMC_printk("%s: gpio_%d:%d, rescan_disable %d", mmc_hostname(host), SD_CARD_DETECT, gpio_get_value(SD_CARD_DETECT), host->rescan_disable);
+              MMC_printk("%s: gpio_%d:%d, rescan_disable %d bus_resume_flags %d", mmc_hostname(host), SD_CARD_DETECT, gpio_get_value(SD_CARD_DETECT), host->rescan_disable, host->bus_resume_flags);
 
 	spin_lock_irqsave(&host->lock, flags);
 
@@ -1607,9 +1607,10 @@ out:
        {
               if(!strcmp(mmc_hostname(host), "mmc1"))
               {
-                     if(wake_status == 0x800000)
+                     if(sd_wake_status == 0x800000)
                      {
-                            MMC_printk("%s: wake up", mmc_hostname(host));
+                            sd_wake_status = 0;
+                            MMC_printk("%s: wake up, sd_wake_status %x", mmc_hostname(host), sd_wake_status);
                             wake_lock_timeout(&sd_delayed_work_wake_lock, 1*HZ);
                      }
                      else
@@ -1843,7 +1844,8 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		notify_block, struct mmc_host, pm_notify);
 	unsigned long flags;
 
-	MMC_printk("%s: mode %d, wake_status 0x%x, bus_resume_flags %d", mmc_hostname(host), mode, wake_status, host->bus_resume_flags);
+	BUG_ON(!host);
+	MMC_printk("%s: mode %d, sd_wake_status 0x%x, bus_resume_flags %d", mmc_hostname(host), mode, sd_wake_status, host->bus_resume_flags);
 
 	switch (mode) {
 	case PM_HIBERNATION_PREPARE:
@@ -1862,8 +1864,11 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		cancel_delayed_work_sync(&host->detect);
 
 		if (!host->bus_ops || host->bus_ops->suspend)
+		{
+			MMC_printk("%s bus driver set", mmc_hostname(host));
 			break;
-
+		}
+		MMC_printk("%s claim_cnt %d claimed %d", mmc_hostname(host), host->claim_cnt, host->claimed);
 		mmc_claim_host(host);
 
 		if (host->bus_ops->remove)
@@ -1872,6 +1877,7 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		mmc_detach_bus(host);
 		mmc_release_host(host);
 		host->pm_flags = 0;
+		MMC_printk("mode %d ended", mode);
 		break;
 
 	case PM_POST_SUSPEND:
@@ -1879,7 +1885,7 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 	case PM_POST_RESTORE:
 
 		spin_lock_irqsave(&host->lock, flags);
-              if(wake_status == 0x800000 && !strcmp(mmc_hostname(host), SDHOST_STRING))
+              if(sd_wake_status == 0x800000 && !strcmp(mmc_hostname(host), SDHOST_STRING))
               {
                      MMC_printk("reset defer resume");
                      host->bus_resume_flags &= ~MMC_BUSRESUME_NEEDS_RESUME;
@@ -1893,7 +1899,7 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		spin_unlock_irqrestore(&host->lock, flags);
 		if(!strcmp(mmc_hostname(host), SDHOST_STRING))
 		{
-                     if(wake_status == 0x800000)
+                     if(sd_wake_status == 0x800000)
                             mmc_detect_change(host, 0);
 		}
 		else
@@ -1901,6 +1907,7 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 
 	}
 
+	MMC_printk("%s finished", mmc_hostname(host));
 	return 0;
 }
 #endif

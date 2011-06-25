@@ -677,4 +677,11 @@ config TOUCHSCREEN_CYTTSP_I2C
 	  This is the i2c version of the driver.
 
 	  To compile this driver as a module, choose M here.
+config TOUCHSCREEN_EETI_UART
+	tristate "EETI touchscreen UART driver"
+	help
+	  Say Y here if you have a Cypress based touchscreen.
+	  This is the i2c version of the driver.
+
+	  To compile this driver as a module, choose M here.
 endif

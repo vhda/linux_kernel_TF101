@@ -16,11 +16,9 @@ mpu3050-objs += mpuirq.o \
 #
 # Accel options
 #
-
 ifdef CONFIG_MPU_SENSORS_KXTF9
 mpu3050-objs += $(MLLITE_DIR)accel/kxtf9.o
 endif
-
 
 #
 # Compass options
@@ -68,3 +66,4 @@ obj-$(CONFIG_MPU_SENSORS_TIMERIRQ)+= timerirq.o
 ifdef CONFIG_MPU_SENSORS_DEBUG
 EXTRA_CFLAGS += -DDEBUG
 endif
+

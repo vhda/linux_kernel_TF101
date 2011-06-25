@@ -43,6 +43,7 @@ enum {
   ASUS_CUSTOM_IOCTL_SET_EV,
   ASUS_CUSTOM_IOCTL_GET_EV,
   ASUS_CUSTOM_IOCTL_AF_GET,
+  ASUS_CUSTOM_IOCTL_GET_ET,
 };
 
 #define  AF_CMD_START 0
@@ -60,13 +61,18 @@ typedef struct
 	int 		data;
 } custom_af_cmd_package;
 
+typedef struct
+{
+	unsigned int 		exposure;
+	unsigned int 		vts;
+} custom_et_value_package;
 
 #define SENSOR_CUSTOM_IOCTL_SET_AF_MODE _IOW('o', ASUS_CUSTOM_IOCTL_AF_SET, custom_af_cmd_package)
 #define SENSOR_CUSTOM_IOCTL_GET_AF_MODE _IOWR('o', ASUS_CUSTOM_IOCTL_AF_GET, custom_af_cmd_package)
 #define SENSOR_CUSTOM_IOCTL_GET_ID _IOW('o', ASUS_CUSTOM_IOCTL_GET_ID, __u16)
 #define SENSOR_CUSTOM_IOCTL_SET_EV _IOW('o', ASUS_CUSTOM_IOCTL_SET_EV, __s16)
 #define SENSOR_CUSTOM_IOCTL_GET_EV _IOR('o', ASUS_CUSTOM_IOCTL_GET_EV, __s16)
-
+#define SENSOR_CUSTOM_IOCTL_GET_ET _IOR('o', ASUS_CUSTOM_IOCTL_GET_ET, __s16)
 
 enum {
       YUV_ColorEffect = 0,

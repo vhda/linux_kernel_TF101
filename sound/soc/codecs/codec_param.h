@@ -7,7 +7,6 @@
 enum project_id {
 	EP101 = 0,
 	EP102,
-	EP103,
 };
 
 struct wm8903_parameters{

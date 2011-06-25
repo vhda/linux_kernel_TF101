@@ -18,12 +18,20 @@ MODULE_LICENSE("GPL");
 
 static struct class *ril_class;
 static struct devices *dev;
+static struct delayed_work workq;
 static dev_t ril_dev;
 static int ril_major = 0;
 static int ril_minor = 0;
 static int proxi_out = 0;
 static int is3G = 0;
+static int modem_detect_count = 0;
 
+static ssize_t show_power_state(struct device *class, struct device_attribute *attr, char *buf);
+static ssize_t store_power_state(struct device *class, struct attribute *attr, const char *buf, size_t count);
+static ssize_t show_reset_state(struct device *class, struct device_attribute *attr, char *buf);
+static ssize_t store_reset_state(struct device *class, struct attribute *attr, const char *buf, size_t count);
+static ssize_t show_ulpi_reset_state(struct device *class, struct device_attribute *attr, char *buf);
+static ssize_t store_ulpi_reset_state(struct device *class, struct attribute *attr, const char *buf, size_t count);
 static ssize_t show_proxi_state(struct device *class, struct device_attribute *attr, char *buf);
 static ssize_t store_proxi_state(struct device *class, struct attribute *attr, const char *buf, size_t count);
 static ssize_t show_sar3g_state(struct device *class, struct device_attribute *attr, char *buf);
@@ -48,6 +56,9 @@ struct platform_driver ril_driver = {
 };
 
 static struct device_attribute ril_device_attr[] = {
+        __ATTR(3g_power, 00644, show_power_state, store_power_state),
+        __ATTR(3g_reset, 00644, show_reset_state, store_reset_state),
+        __ATTR(ulpi_reset, 00644, show_ulpi_reset_state, store_ulpi_reset_state),
         __ATTR(proxi_out, 00644, show_proxi_state, store_proxi_state),
         __ATTR(sar_det_3g, 00644, show_sar3g_state, store_sar3g_state),
         __ATTR(sim_state, 00644, show_sim_state, NULL),
@@ -72,6 +83,47 @@ static void ril_shutdown(struct platform_device *pdev)
     gpio_set_value(GPIO_3G_Power_PIN, 0);
 }
 
+static void store_gpio(const char *buf, int gpio, char *name)
+{
+    int state = 0;
+    sscanf(buf, "%d", &state);
+    gpio_set_value(gpio, state);
+    RIL_INFO("Set %s state to %d\n", name, state);
+}
+
+static ssize_t show_power_state(struct device *class, struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", gpio_get_value(GPIO_3G_Power_PIN));
+}
+
+static ssize_t store_power_state(struct device *class, struct attribute *attr, const char *buf, size_t count)
+{
+    store_gpio(buf, GPIO_3G_Power_PIN, "GPIO_3G_Power_PIN");
+    return count;
+}
+
+static ssize_t show_reset_state(struct device *class, struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", gpio_get_value(GPIO_3G_Reset_PIN));
+}
+
+static ssize_t store_reset_state(struct device *class, struct attribute *attr, const char *buf, size_t count)
+{
+    store_gpio(buf, GPIO_3G_Reset_PIN, "GPIO_3G_Reset_PIN");
+    return count;
+}
+
+static ssize_t show_ulpi_reset_state(struct device *class, struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", gpio_get_value(GPIO_ULPI_Reset_PIN));
+}
+
+static ssize_t store_ulpi_reset_state(struct device *class, struct attribute *attr, const char *buf, size_t count)
+{
+    store_gpio(buf, GPIO_ULPI_Reset_PIN, "GPIO_ULPI_Reset_PIN");
+    return count;
+}
+
 static ssize_t show_proxi_state(struct device *class, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%d\n", proxi_out);
@@ -93,10 +145,7 @@ static ssize_t show_sar3g_state(struct device *class, struct device_attribute *a
 
 static ssize_t store_sar3g_state(struct device *class, struct attribute *attr, const char *buf, size_t count)
 {
-    int state = 0;
-    sscanf(buf, "%d", &state);
-    gpio_set_value(GPIO_SAR_DET_3G, state);
-    RIL_INFO("Set GPIO_SAR_DET_3G state to %d\n", state);
+    store_gpio(buf, GPIO_SAR_DET_3G, "GPIO_SAR_DET_3G");
     return count;
 }
 
@@ -230,6 +279,47 @@ sim_pin_request_failed:
 
 }
 
+static int detect_id(void)
+{
+    struct file *fv = NULL;
+    struct file *fp = NULL;
+
+    fv = filp_open(USB_VID_PATH, O_RDONLY, 0);
+    fp = filp_open(USB_PID_PATH, O_RDONLY, 0);
+
+    if (!IS_ERR(fv) && !IS_ERR(fp)) {
+        filp_close(fv, NULL);
+        filp_close(fp, NULL);
+        RIL_INFO("open file success\n");
+        return 1;
+    }
+
+    if (!IS_ERR(fv)) filp_close(fv, NULL);
+    if (!IS_ERR(fp)) filp_close(fp, NULL);
+
+    RIL_INFO("open file failed\n");
+    return 0;
+}
+
+static void detect_modem(void)
+{
+    modem_detect_count++;
+    if (detect_id() > 0 ) {
+        RIL_INFO("USB find the modem\n");
+    } else {
+        RIL_ERR("USB cannot find the modem, reset GPIO_ULPI_Reset_PIN\n");
+        RIL_ERR("modem_detect_count = %d\n", modem_detect_count);
+        if (modem_detect_count <= 3) {
+            gpio_set_value(GPIO_ULPI_Reset_PIN, 0);
+            mdelay(50);
+            gpio_set_value(GPIO_ULPI_Reset_PIN, 1);
+            schedule_delayed_work(&workq, 4*HZ);
+        } else {
+            gpio_set_value(GPIO_3G_Power_PIN, 0);
+            gpio_set_value(GPIO_3G_Reset_PIN, 0);
+        }
+    }
+}
 static int init_output_gpio(void)
 {
     int rc = 0;
@@ -263,6 +353,28 @@ static int init_output_gpio(void)
         goto failed;
     }
 
+    if (is3G) {
+        INIT_DELAYED_WORK(&workq, detect_modem);
+        schedule_delayed_work(&workq, 4*HZ);
+    }
+
+    /* request GPIO_ULPI_Reset_PIN */
+    tegra_gpio_enable(GPIO_ULPI_Reset_PIN);
+    rc = gpio_request(GPIO_ULPI_Reset_PIN, "ULPI_Reset");
+
+    if (rc = -16) {
+        RIL_INFO("GPIO_ULPI_Reset_PIN has been requested");
+    } else if (rc < 0) {
+        RIL_ERR("gpio_request failed for GPIO_ULPI_Reset_PIN, rc = %d\n", rc);
+        goto failed;
+    } else {
+        rc = gpio_direction_output(GPIO_ULPI_Reset_PIN, gpio_get_value(GPIO_ULPI_Reset_PIN));
+        if (rc < 0) {
+            RIL_ERR("gpio_direction_output failed for GPIO_ULPI_Reset_PIN\n");
+            goto failed;
+        }
+    }
+
     /* request GPIO_SAR_DET_3G */
     tegra_gpio_enable(GPIO_SAR_DET_3G);
     rc = gpio_request(GPIO_SAR_DET_3G, "sar_det_3G");
@@ -277,7 +389,8 @@ static int init_output_gpio(void)
     }
 
     RIL_INFO("GPIO_3G_Power_PIN: state = %d\n", gpio_get_value(GPIO_3G_Power_PIN));
-    RIL_INFO("GPIO_3G_Reset_PIN: state = %d\n", gpio_get_value(GPIO_3G_Power_PIN));
+    RIL_INFO("GPIO_3G_Reset_PIN: state = %d\n", gpio_get_value(GPIO_3G_Reset_PIN));
+    RIL_INFO("GPIO_ULPI_Reset_PIN: state = %d\n", gpio_get_value(GPIO_ULPI_Reset_PIN));
     RIL_INFO("GPIO_SAR_DET_3G: state = %d\n", gpio_get_value(GPIO_SAR_DET_3G));
     RIL_INFO("init_output_gpio success\n");
     return 0;

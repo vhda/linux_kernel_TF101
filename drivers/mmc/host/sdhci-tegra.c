@@ -43,6 +43,7 @@ struct tegra_sdhci_host {
 	int clk_enabled;
 	bool card_always_on;
 	u32 sdhci_ints;
+	int wp_gpio;
 };
 
 static irqreturn_t carddetect_irq(int irq, void *data)
@@ -88,9 +89,19 @@ static void tegra_sdhci_set_clock(struct sdhci_host *sdhci, unsigned int clock)
 	tegra_sdhci_enable_clock(host, clock);
 }
 
+static int tegra_sdhci_get_ro(struct sdhci_host *sdhci)
+{
+	struct tegra_sdhci_host *host;
+	host = sdhci_priv(sdhci);
+	if (gpio_is_valid(host->wp_gpio))
+		return gpio_get_value(host->wp_gpio);
+	return 0;
+}
+
 static struct sdhci_ops tegra_sdhci_ops = {
 	.enable_dma = tegra_sdhci_enable_dma,
 	.set_clock = tegra_sdhci_set_clock,
+	.get_ro = tegra_sdhci_get_ro,
 };
 
 static int __devinit tegra_sdhci_probe(struct platform_device *pdev)
@@ -128,6 +139,7 @@ static int __devinit tegra_sdhci_probe(struct platform_device *pdev)
 	host = sdhci_priv(sdhci);
 	host->sdhci = sdhci;
 	host->card_always_on = (plat->power_gpio == -1) ? 1 : 0;
+	host->wp_gpio = plat->wp_gpio;
 
 	host->clk = clk_get(&pdev->dev, plat->clk_id);
 	if (IS_ERR(host->clk)) {
@@ -153,7 +165,8 @@ static int __devinit tegra_sdhci_probe(struct platform_device *pdev)
 			SDHCI_QUIRK_NO_HISPD_BIT |
 			SDHCI_QUIRK_8_BIT_DATA |
 			SDHCI_QUIRK_NO_VERSION_REG |
-			SDHCI_QUIRK_BROKEN_ADMA_ZEROLEN_DESC;
+			SDHCI_QUIRK_BROKEN_ADMA_ZEROLEN_DESC |
+			SDHCI_QUIRK_RUNTIME_DISABLE;
 
 	if (plat->force_hs != 0)
 		sdhci->quirks |= SDHCI_QUIRK_FORCE_HIGH_SPEED_MODE;
@@ -327,6 +340,7 @@ static int tegra_sdhci_resume(struct platform_device *pdev)
 {
 	struct tegra_sdhci_host *host = platform_get_drvdata(pdev);
 	int ret;
+	u8 pwr;
 
 	MMC_printk("%s:+", mmc_hostname(host->sdhci->mmc));
 
@@ -352,6 +366,11 @@ static int tegra_sdhci_resume(struct platform_device *pdev)
 	}
 
 	tegra_sdhci_enable_clock(host, 1);
+
+	pwr = SDHCI_POWER_ON;
+	sdhci_writeb(host->sdhci, pwr, SDHCI_POWER_CONTROL);
+	host->sdhci->pwr = 0;
+
 	ret = sdhci_resume_host(host->sdhci);
 	if (ret)
 		pr_err("%s: failed, error = %d\n", __func__, ret);

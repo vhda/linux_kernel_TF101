@@ -27,14 +27,18 @@
 #include <linux/gpio.h>
 //----
 
+#include <mach/board-ventana-misc.h>
+#include <linux/workqueue.h>
+#include <linux/delay.h>
 #include "dsp.h"
 
 
 #undef DUMP_REG
 
 #define DSP_IOC_MAGIC	0xf3
-#define DSP_IOC_MAXNR	1
+#define DSP_IOC_MAXNR	2
 #define DSP_CONTROL	_IOW(DSP_IOC_MAGIC, 1,int)
+#define DSP_RECONFIG	_IOW(DSP_IOC_MAGIC, 2,int)
 
 #define START_RECORDING 1
 #define END_RECORDING 0
@@ -49,6 +53,9 @@ static int fm34_probe(struct i2c_client *client,
 static int fm34_remove(struct i2c_client *client);
 static int fm34_suspend(struct i2c_client *client, pm_message_t mesg);
 static int fm34_resume(struct i2c_client *client);
+static void fm34_reconfig(void) ;
+extern int hs_micbias_power(int on);
+extern bool jack_alive;
 
 static const struct i2c_device_id fm34_id[] = {
 	{DEVICE_NAME, 0},
@@ -58,7 +65,6 @@ static const struct i2c_device_id fm34_id[] = {
 struct i2c_client *fm34_client;
 struct fm34_chip *dsp_chip;
 bool bConfigured=false;
-
 
 MODULE_DEVICE_TABLE(i2c, fm34_id);
 
@@ -91,8 +97,13 @@ int fm34_config_DSP(void)
 	int ret=0;
 	struct i2c_msg msg[3];
 	u8 buf1;
+	int config_length;
+	u8 *config_table;
 
 	if(!bConfigured){
+		gpio_set_value(TEGRA_GPIO_PH3, 1); // Enable DSP
+		msleep(20);
+
 		//access chip to check if acknowledgement.
 		buf1=0xC0;
 		/* Write register */
@@ -109,18 +120,25 @@ int fm34_config_DSP(void)
 		else
 			FM34_INFO("DSP ACK,  read 0x%x: %d\n", buf1, ret);
 
-		gpio_set_value(TEGRA_GPIO_PH3, 1); // Enable DSP
 		fm34_reset_DSP();
 		msleep(100);
 
-		ret = i2c_master_send(dsp_chip->client, input_parameter, sizeof(input_parameter));
-		FM34_INFO("sizeof(input_parameter) = %d\n", sizeof(input_parameter));
+		FM34_INFO("Load DSP parameters\n");
+		config_length= sizeof(input_parameter);
+		config_table= (u8 *)input_parameter;
 
-		if(ret == sizeof(input_parameter))
+		ret = i2c_master_send(dsp_chip->client, config_table, config_length);
+		FM34_INFO("config_length = %d\n", config_length);
+
+		if(ret == config_length){
+			FM34_INFO("DSP configuration is done\n");
 			bConfigured=true;
+		}	
 
 		msleep(100);
 	}
+
+	gpio_set_value(TEGRA_GPIO_PH3, 0);
 
 	return ret;
 }
@@ -185,6 +203,7 @@ long fm34_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int err = 0;
 	int retval = 0;
+	int ret = 0;
 	static int recording_enabled = -1;
 
 	if (_IOC_TYPE(cmd) != DSP_IOC_MAGIC) return -ENOTTY;
@@ -211,25 +230,51 @@ long fm34_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 			switch(arg){
 				case START_RECORDING:
-					FM34_INFO("Audio input event enabled, enable DSP\n");
-					gpio_set_value(TEGRA_GPIO_PH3, 1); // Enable DSP
+					if(jack_alive){
+						FM34_INFO("Start recording(AMIC), bypass DSP\n");
+						gpio_set_value(TEGRA_GPIO_PH3, 1);
+						msleep(10);
+						ret = i2c_master_send(dsp_chip->client, (u8 *)bypass_parameter, sizeof(bypass_parameter));
+						msleep(5);
+						gpio_set_value(TEGRA_GPIO_PH3, 0);
+					}else{
+						FM34_INFO("Start recording(DMIC), enable DSP\n");
+						gpio_set_value(TEGRA_GPIO_PH3, 1);
+						msleep(10);
+						ret = i2c_master_send(dsp_chip->client, (u8 *)enable_parameter, sizeof(enable_parameter));
+					}
 					recording_enabled = START_RECORDING;
+					hs_micbias_power(1);
 					break;
 
 				case END_RECORDING:
-					FM34_INFO("Audio input event disabled, bypass DSP\n");
-					gpio_set_value(TEGRA_GPIO_PH3, 0); // Bypass DSP
+					FM34_INFO("End recording, bypass DSP\n");
+					gpio_set_value(TEGRA_GPIO_PH3, 1);
+					msleep(10);
+					ret = i2c_master_send(dsp_chip->client, (u8 *)bypass_parameter, sizeof(bypass_parameter));
 					recording_enabled = END_RECORDING;
+					hs_micbias_power(0);
+					msleep(5);
+					gpio_set_value(TEGRA_GPIO_PH3, 0);
 					break;
 
 				case PLAYBACK:
 				default:
 					if(recording_enabled != START_RECORDING){
 						FM34_INFO("Audio output event enabled, bypass DSP\n");
-						gpio_set_value(TEGRA_GPIO_PH3, 0); // Bypass DSP
+						gpio_set_value(TEGRA_GPIO_PH3, 1);
+						msleep(10);
+						ret = i2c_master_send(dsp_chip->client, (u8 *)bypass_parameter, sizeof(bypass_parameter));
+						msleep(5);
+						gpio_set_value(TEGRA_GPIO_PH3, 0); /* Bypass DSP */
 					}
 				break;
 			}
+		break;
+
+		case DSP_RECONFIG:
+			FM34_INFO("DSP ReConfig parameters\n");
+			fm34_reconfig();
 		break;
 
 	  default:  /* redundant, as cmd was checked against MAXNR */
@@ -324,12 +369,24 @@ static int fm34_remove(struct i2c_client *client)
 	return 0;
 }
 
+void fm34_reconfig(void)
+{
+	FM34_INFO("ReConfigure DSP\n");
+	bConfigured=false;
+	fm34_config_DSP();
+}
+
 static int fm34_suspend(struct i2c_client *client, pm_message_t mesg)
 {
+	printk("fm34_suspend+\n");
+	gpio_set_value(TEGRA_GPIO_PH3, 0); // Bypass DSP
+	printk("fm34_suspend-\n");
 	return 0;
 }
 static int fm34_resume(struct i2c_client *client)
 {
+	printk("fm34_resume+\n");
+	printk("fm34_resume-\n");
 	return 0;
 }
 

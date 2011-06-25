@@ -258,7 +258,15 @@ long has_wake_lock(int type)
 	spin_unlock_irqrestore(&list_lock, irqflags);
 	return ret;
 }
-
+struct timer_list suspend_timer;
+extern void watchdog_enable(int sec);
+extern void watchdog_disable(void);
+void suspend_worker_timeout(unsigned long data)
+{
+	printk(KERN_EMERG "**** suspend_worker_timeout\n");
+	watchdog_disable();
+	BUG();
+}
 static void suspend(struct work_struct *work)
 {
 	int ret;
@@ -276,7 +284,16 @@ static void suspend(struct work_struct *work)
 	sys_sync();
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("suspend: enter suspend\n");
+
+	init_timer_on_stack(&suspend_timer);
+	suspend_timer.expires = jiffies + HZ * 9;
+	suspend_timer.function = suspend_worker_timeout;
+	add_timer(&suspend_timer);
+	watchdog_enable(11);
 	ret = pm_suspend(requested_suspend_state);
+	watchdog_disable();
+	del_timer_sync(&suspend_timer);
+	destroy_timer_on_stack(&suspend_timer);
 	if (debug_mask & DEBUG_EXIT_SUSPEND) {
 		struct timespec ts;
 		struct rtc_time tm;
@@ -546,6 +563,7 @@ static const struct file_operations wakelock_stats_fops = {
 	.llseek = seq_lseek,
 	.release = single_release,
 };
+
 
 static int __init wakelocks_init(void)
 {

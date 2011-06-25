@@ -34,6 +34,7 @@
 #include <linux/err.h>
 #include <linux/clk.h>
 #include <mach/clk.h>
+#include <mach/board-ventana-misc.h>
 #endif
 #define SENSOR_WIDTH_REG 0x2703
 #define SENSOR_1280_WIDTH_VAL 0x0518
@@ -2621,8 +2622,11 @@ int __init mi5140_sensor_yuv_late_init(void)
     }
     else
     {
+      if (ASUSGetProjectID() == 101)
+      {
         printk("101: default using OV5640\n");
         tegra_camera_set_caminfo(0,1);
+      }
     }
     info->i2c_client->addr=0x3d;
   }

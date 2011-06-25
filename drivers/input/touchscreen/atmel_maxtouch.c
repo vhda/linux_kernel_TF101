@@ -336,6 +336,11 @@ typedef struct
 	u16 x;
 	u16 y;
 } report_finger_info_struct;
+/* 
+     Define the checksum of default configuration and change this macro every time 
+     when the touch configuration was changed.
+*/
+#define DEFAULT_CONFIG_CHECHSUM 0x81AFD3
 
 static report_finger_info_struct fingerInfo[10]={0};
 
@@ -445,6 +450,30 @@ static ssize_t show_FW_version(struct device *dev, struct device_attribute *deva
 {
 	return sprintf(buf, "Touch Firmware Version: %d.%d, checksum is %d\n", ver_major, ver_minor, fw_checksum);
 }
+
+static ssize_t store_mode2(struct device *dev, struct device_attribute *devattr,const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct mxt_data*data = i2c_get_clientdata(client);
+	int cfg[3];
+	char *pch;
+
+	sscanf(buf, "%d%d%d\n",&cfg[0], &cfg[1], &cfg[2]);
+		
+	mxt_write_byte(data->client, MXT_BASE_ADDR(cfg[0], data)+cfg[1],cfg[2]);
+
+	printk("Touch: cfg[0]=%d, cfg[1]=%d, cfg[2]=%d\n",cfg[0],cfg[1],cfg[2]);
+	
+	mxt_write_byte(data->client, MXT_BASE_ADDR(MXT_GEN_COMMANDPROCESSOR_T6, data) + MXT_ADR_T6_BACKUPNV,MXT_CMD_T6_BACKUP);
+	gpio_set_value(TEGRA_GPIO_PQ7, 0);
+	msleep(1);
+	gpio_set_value(TEGRA_GPIO_PQ7, 1);
+	msleep(100);
+//	mxt_write_byte(data->client,MXT_BASE_ADDR(MXT_GEN_COMMANDPROCESSOR_T6,data) + MXT_ADR_T6_RESET, 1);
+	return count;
+}
+
+DEVICE_ATTR(cfg_ep101, S_IRUGO | S_IWUSR, NULL, store_mode2);
 DEVICE_ATTR(d_print, S_IRUGO | S_IWUSR, NULL, store_d_print);
 DEVICE_ATTR(atmel_touchpanel_status, 0755, show_status, NULL);
 DEVICE_ATTR(FW_version, 0755, show_FW_version, NULL);
@@ -455,6 +484,7 @@ static struct attribute *mxt_attr[] = {
 	&dev_attr_atmel_touchpanel_status.attr,
 	&dev_attr_dump_T7.attr,
 	&dev_attr_FW_version.attr,
+	&dev_attr_cfg_ep101.attr,
 	NULL
 };
 ssize_t debug_data_read(struct mxt_data *mxt, char *buf, size_t count,
@@ -1276,7 +1306,7 @@ static int init_touch_config(struct mxt_data *mxt)
 
 	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt), 0x41);
 	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt)+1, 0xFF);
-	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt)+2, 0x0A);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt)+2, 0x32);
 
 	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_ACQUIRECONFIG_T8, mxt), 0x09);
 	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_ACQUIRECONFIG_T8, mxt)+1, 0);
@@ -1626,7 +1656,7 @@ int process_message(u8 *message, u8 object, struct mxt_data *mxt)
 		cfg_crc= buf[2] << 16 | buf[1] <<8 | buf[0];
 		printk("Touch: configuration checksum is %lx\n",cfg_crc);
 
-		if (cfg_crc != 0x8AB184){
+		if (cfg_crc != DEFAULT_CONFIG_CHECHSUM){
 			printk("Touch: start BACKUP\n");
 			mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_COMMANDPROCESSOR_T6, mxt) + MXT_ADR_T6_BACKUPNV,MXT_CMD_T6_BACKUP);
 			gpio_set_value(TEGRA_GPIO_PQ7, 0);
@@ -1982,13 +2012,20 @@ static int __devinit mxt_identify(struct i2c_client *client,
 	u8 buf[7];
 	int error;
 	int identified;
-
+	int retry = 2;
+	int times;
+      
 	identified = 0;
 
 	/* Read Device info to check if chip is valid */
-	error = mxt_read_block(client, MXT_ADDR_INFO_BLOCK, MXT_ID_BLOCK_SIZE,
-			       (u8 *) buf);
-
+       for(times = 0; times < retry; times++ ){
+	     error = mxt_read_block(client, MXT_ADDR_INFO_BLOCK, MXT_ID_BLOCK_SIZE,
+			       (u8 *) buf); 
+	     if(error >= 0)
+		 	break;
+	     else if(times == 0)
+		 	msleep(25);
+	 }
 	if (error < 0) {
 		mxt->read_fail_counter++;
 		dev_err(&client->dev, "Failure accessing maXTouch device\n");
@@ -2804,7 +2841,7 @@ static int mxt_suspend(struct i2c_client *client, pm_message_t mesg)
 	mxt_stop(mxt);
 
 	for (i =0; i<=1; i++){
-			error =mxt_write_byte(mxt->client, 328 +i , 0);
+			error =mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt)+i , 0);
 			if (error < 0){
 				mxt_disable_result = error;
 				break;
@@ -2843,22 +2880,22 @@ static int mxt_resume(struct i2c_client *client)
 
 	force_release_pos();
 
-	mxt_write_byte(mxt->client, 264, 0);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_USER_INFO_T38, mxt), 0);
 	msleep(25);
-	mxt_write_byte(mxt->client, 328, 0x41);
-	mxt_write_byte(mxt->client, 329, 0xFF);
-	mxt_write_byte(mxt->client, 337, 0x05);
-	mxt_write_byte(mxt->client, 338, 0x37);
-	mxt_write_byte(mxt->client, 339, 0x0A);
-	mxt_write_byte(mxt->client, 340, 0xC0);
-	mxt_write_byte(mxt->client, 348, 0x4B);
-	mxt_write_byte(mxt->client, 467, 0);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt), 0x41);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_POWERCONFIG_T7, mxt) + 1, 0xFF);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_ACQUIRECONFIG_T8, mxt)+ 6, 0x05);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_ACQUIRECONFIG_T8, mxt)+ 7, 0x37);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_ACQUIRECONFIG_T8, mxt)+ 8, 0x0A);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_ACQUIRECONFIG_T8, mxt)+ 9, 0xC0);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_TOUCH_MULTITOUCHSCREEN_T9, mxt)+ 7, 0x4B);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_PALMSUPPRESSION_T41, mxt), 0);
 
 	suspend_flag = false;
 	mxt_start(mxt);
 	gpio_direction_input(TEGRA_GPIO_PV6);
 
-	mxt_write_byte(mxt->client,260, 1);
+	mxt_write_byte(mxt->client, MXT_BASE_ADDR(MXT_GEN_COMMANDPROCESSOR_T6, mxt) + 2, 1);
 	schedule_delayed_work(&mxt->dwork, 0);
 	resume_flag = true;
 	delta_flag = true;

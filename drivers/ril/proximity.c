@@ -19,6 +19,7 @@ static ssize_t print_proxi_state(struct switch_dev *sdev, char *buf)
 
 void ril_request_proxi(int state)
 {
+#ifdef CONFIG_PROX
     //should call proximity function
     RIL_INFO("state = %d\n", state);
     if (state) {
@@ -26,6 +27,9 @@ void ril_request_proxi(int state)
     } else {
         prox_lds6202_disable();
     }
+#else
+    RIL_INFO("proximity is not configured");
+#endif
 }
 
 void proxi_request_ril(int state)

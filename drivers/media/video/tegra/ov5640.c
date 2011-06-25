@@ -409,6 +409,8 @@ const struct sensor_reg mode_1280x960_restart[] = {
 	{0x3824, 0x01},
 	{0x3003, 0x03},
 	{0x3003, 0x01},
+	{0x4003, 0x81}, //BLC setting
+	{0x4003, 0x08}, //BLC setting
 {SENSOR_WAIT_MS, 150}, //delay=100
 	{SENSOR_TABLE_END, 0x0000}
 };
@@ -4536,6 +4538,8 @@ static struct sensor_reg mode_1280x960[] = {
 {0x3000 , 0x00},
 #endif
 {0x3003, 0x01},
+{0x4003, 0x81}, //BLC setting
+{0x4003, 0x08}, //BLC setting
 {SENSOR_WAIT_MS, 100}, //
 	{SENSOR_TABLE_END, 0x0000},
 };
@@ -9448,7 +9452,7 @@ static long sensor_ioctl(struct file *file,
             if (i < 5)
               i++;
             else
-	break;
+              break;
             msleep(10);
             err = sensor_read_reg(info->i2c_client, 0x3029, &FW_Status);
             if (err)
@@ -9613,10 +9617,48 @@ static long sensor_ioctl(struct file *file,
       return 0;
     }
 
-  	default:
-  		return -EINVAL;
-	}
-	return 0;
+    case SENSOR_CUSTOM_IOCTL_GET_ET:
+    {
+      printk("SENSOR_CUSTOM_IOCTL_GET_ET \n");
+      custom_et_value_package ET;
+      u16 para0=1, para1=1, para2=1, para3=1, para4=1;
+      u32 exposure;
+      u32 vts;
+
+      sensor_read_reg(info->i2c_client, 0x3500, &para0);
+      sensor_read_reg(info->i2c_client, 0x3501, &para1);
+      sensor_read_reg(info->i2c_client, 0x3502, &para2);
+      sensor_read_reg(info->i2c_client, 0x380e, &para3);
+      sensor_read_reg(info->i2c_client, 0x380f, &para4);
+
+      printk("0x3500:0x%X 0x3501:0x%X 0x3502:0x%X 0x380e:0x%X 0x380f:0x%X \n", para0, para1, para2, para3, para4);
+
+      exposure = (para0 << 12) | (para1 << 4) | (para2 >> 4);
+      vts = (para3 << 8) | para4;
+
+      ET.exposure = exposure << 1;
+      ET.vts = vts * 15;
+
+      if (err)
+        return err;
+
+      printk("GET_ET: exposure = %d \n", exposure);
+      printk("GET_ET: vts = %d \n", vts);
+
+      if (copy_to_user((const void __user *)arg, &ET, sizeof(ET)))
+      {
+        return -EFAULT;
+      }
+      if (err)
+        return err;
+
+      return 0;
+    }
+
+    default:
+      return -EINVAL;
+    }
+    return 0;
 }
 
 static int sensor_open(struct inode *inode, struct file *file)

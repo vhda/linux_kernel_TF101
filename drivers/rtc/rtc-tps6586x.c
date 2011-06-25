@@ -29,12 +29,17 @@
 #include <linux/rtc.h>
 #include <linux/slab.h>
 
-#define RTC_CTRL 	0xc0
-#define RTC_OSC_SOURCE_SEL 	BIT(6)	/* 1->external 0->internal */
+#define RTC_CTRL	0xc0
+#define POR_RESET_N	BIT(7)
+#define OSC_SRC_SEL	BIT(6)
 #define RTC_ENABLE	BIT(5)	/* enables alarm */
-#define RTC_HIRES	BIT(4)	/* 1Khz or 32Khz updates */
+#define RTC_BUF_ENABLE	BIT(4)	/* 32 KHz buffer enable */
+#define PRE_BYPASS	BIT(3)	/* 0=1KHz or 1=32KHz updates */
+#define CL_SEL_MASK	(BIT(2)|BIT(1))
+#define CL_SEL_POS	1
 #define RTC_ALARM1_HI	0xc1
 #define RTC_COUNT4	0xc6
+#define RTC_COUNT4_DUMMYREAD 0xc5  /* start a PMU RTC access by reading the register prior to the RTC_COUNT4 */
 
 struct tps6586x_rtc {
 	unsigned long		epoch_start;
@@ -54,17 +59,17 @@ static int tps6586x_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	struct device *tps_dev = to_tps6586x_dev(dev);
 	unsigned long long ticks = 0;
 	unsigned long seconds;
-	u8 buff[5];
+	u8 buff[6];
 	int err;
 	int i;
 
-	err = tps6586x_reads(tps_dev, RTC_COUNT4, sizeof(buff), buff);
+	err = tps6586x_reads(tps_dev, RTC_COUNT4_DUMMYREAD, sizeof(buff), buff);
 	if (err < 0) {
 		dev_err(dev, "failed to read counter\n");
 		return err;
 	}
 
-	for (i = 0; i < sizeof(buff); i++) {
+	for (i = 1; i < sizeof(buff); i++) {
 		ticks <<= 8;
 		ticks |= buff[i];
 	}
@@ -113,11 +118,6 @@ static int tps6586x_rtc_set_time(struct device *dev, struct rtc_time *tm)
 		return err;
 	}
 
-	err = tps6586x_set_bits(tps_dev, RTC_CTRL, RTC_OSC_SOURCE_SEL);
-	if (err < 0) {
-		dev_err(dev, "failed to set RTC_OSC_SOURCE_SEL\n");
-		return err;
-	}
 	err = tps6586x_set_bits(tps_dev, RTC_CTRL, RTC_ENABLE);
 	if (err < 0) {
 		dev_err(dev, "failed to set RTC_ENABLE\n");
@@ -290,9 +290,11 @@ static int __devinit tps6586x_rtc_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	/* disable high-res mode, enable tick counting */
+	/* 1 kHz tick mode, enable tick counting */
 	err = tps6586x_update(tps_dev, RTC_CTRL,
-			      (RTC_ENABLE | RTC_HIRES), RTC_ENABLE);
+		RTC_ENABLE | OSC_SRC_SEL | ((pdata->cl_sel << CL_SEL_POS) &
+					    CL_SEL_MASK),
+		RTC_ENABLE | OSC_SRC_SEL | PRE_BYPASS | CL_SEL_MASK);
 	if (err < 0) {
 		dev_err(&pdev->dev, "unable to start counter\n");
 		goto fail;

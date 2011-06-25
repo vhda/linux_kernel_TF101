@@ -795,6 +795,52 @@ static const struct tegra_emc_table ventana_emc_tables_elpida_400Mhz[] = {
 	}
 };
 
+static const struct tegra_emc_chip ventana_emc_chips[] = {
+	{
+		.description = "Elpida 300MHz",
+		.mem_manufacturer_id = 0x0303,
+		.mem_revision_id1 = -1,
+		.mem_revision_id2 = -1,
+		.mem_pid = -1,
+		.table = ventana_emc_tables_elpida_300Mhz,
+		.table_size = ARRAY_SIZE(ventana_emc_tables_elpida_300Mhz)
+	},
+};
+
+static const struct tegra_emc_chip ventana_t25_emc_chips[] = {
+	{
+		.description = "Elpida 400MHz",
+		.mem_manufacturer_id = 0x0303,
+		.mem_revision_id1 = -1,
+		.mem_revision_id2 = -1,
+		.mem_pid = -1,
+		.table = ventana_emc_tables_elpida_400Mhz,
+		.table_size = ARRAY_SIZE(ventana_emc_tables_elpida_400Mhz)
+	},
+};
+static const struct tegra_emc_chip ASUS_hynix_ventana_emc_chips[] = {
+	{
+		.description = "Hynix 300MHz",
+		.mem_manufacturer_id = 0x0606,
+		.mem_revision_id1 = 0,
+		.mem_revision_id2 = 0,
+		.mem_pid = 0x5454,
+		.table = ventana_emc_tables_hynix_300Mhz,
+		.table_size = ARRAY_SIZE(ventana_emc_tables_hynix_300Mhz)
+	},
+};
+
+static const struct tegra_emc_chip ASUS_elpida_ventana_emc_chips[] = {
+	{
+		.description = "Elpida 300MHz",
+		.mem_manufacturer_id = 0x0303,
+		.mem_revision_id1 = 0x101,
+		.mem_revision_id2 = 0,
+		.mem_pid = 0x5454,
+		.table = ventana_emc_tables_elpida_300Mhz,
+		.table_size = ARRAY_SIZE(ventana_emc_tables_elpida_300Mhz)
+	},
+};
 #define TEGRA25_SKU		0x0B00
 
 int ventana_emc_init(void)
@@ -805,32 +851,30 @@ int ventana_emc_init(void)
 	 extern unsigned int ventana_hw;
         ret = HW_DRF_VAL(TEGRA_DEVKIT, MISC_HW, MEMTYPE, ventana_hw);
 	 if ( ret == TEGRA_DEVKIT_MISC_HW_0_MEMTYPE_1 ){
-		pr_info("%s: Elpida 4Gb 333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
-		tegra_init_emc(ventana_emc_tables_elpida_300Mhz,
-			ARRAY_SIZE(ventana_emc_tables_elpida_300Mhz));
+		printk("%s: Elpida 4Gb 333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
+		tegra_init_emc(ASUS_elpida_ventana_emc_chips,
+			ARRAY_SIZE(ASUS_elpida_ventana_emc_chips));
 	} else if ( ret == TEGRA_DEVKIT_MISC_HW_0_MEMTYPE_2 ){
-		pr_info("%s: hynix 8Gb333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
-		tegra_init_emc(ventana_emc_tables_hynix_300Mhz,
-			ARRAY_SIZE(ventana_emc_tables_hynix_300Mhz));
+		printk("%s: hynix 8Gb333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
+		tegra_init_emc( ASUS_hynix_ventana_emc_chips,
+			ARRAY_SIZE( ASUS_hynix_ventana_emc_chips));
 	}else if ( ret == TEGRA_DEVKIT_MISC_HW_0_MEMTYPE_3 ){
-		pr_info("%s: hynix 4Gb 333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
-		tegra_init_emc(ventana_emc_tables_hynix_300Mhz,
-			ARRAY_SIZE(ventana_emc_tables_hynix_300Mhz));
+		printk("%s: hynix 4Gb 333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
+		tegra_init_emc( ASUS_hynix_ventana_emc_chips,
+			ARRAY_SIZE( ASUS_hynix_ventana_emc_chips));
 	}else {
-		pr_info("%s: Elpida 8Gb 333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
-		tegra_init_emc(ventana_emc_tables_elpida_300Mhz,
-			ARRAY_SIZE(ventana_emc_tables_elpida_300Mhz));
+		printk("%s: Elpida 8Gb 333 Mhz memory found ventana_hw=%u ret=%u\n", __func__,ventana_hw,ret);
+		tegra_init_emc(ASUS_elpida_ventana_emc_chips,
+			ARRAY_SIZE(ASUS_elpida_ventana_emc_chips));
 	}
 	#else
 	tegra_get_board_info(&BoardInfo);
 	if (BoardInfo.sku == TEGRA25_SKU) {
-		pr_info("%s: Elpida 400 Mhz memory found\n", __func__);
-		tegra_init_emc(ventana_emc_tables_elpida_400Mhz,
-			ARRAY_SIZE(ventana_emc_tables_elpida_400Mhz));
+		tegra_init_emc(ventana_t25_emc_chips,
+			ARRAY_SIZE(ventana_t25_emc_chips));
 	} else {
-		pr_info("%s: Elpida 333 Mhz memory found\n", __func__);
-		tegra_init_emc(ventana_emc_tables_elpida_300Mhz,
-			ARRAY_SIZE(ventana_emc_tables_elpida_300Mhz));
+		tegra_init_emc(ventana_emc_chips,
+			ARRAY_SIZE(ventana_emc_chips));
 	}
 	#endif
 	return 0;

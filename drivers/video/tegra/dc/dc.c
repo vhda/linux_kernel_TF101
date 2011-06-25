@@ -55,15 +55,24 @@
 static int no_vsync;
 static struct timeval t_suspend;
 bool b_dc0_enabled;
+static unsigned int asus_project_id=-1;
 extern int battery_charger_callback(unsigned int enable);
 extern  int mxt_enable(void);
 extern  int mxt_disable(void);
+extern  int egalax_enable(void);
+extern  int egalax_disable(void);
+extern  int mxt_enable_ep102(void);
+extern  int mxt_disable_ep102(void);
+extern  unsigned int ASUSGetProjectID(void);
+static int (*touch_enable_fp[3])(void) = {mxt_enable, mxt_enable_ep102, egalax_enable};
+static int (*touch_disable_fp[3])(void) = {mxt_disable, mxt_disable_ep102, egalax_disable};
 
 module_param_named(no_vsync, no_vsync, int, S_IRUGO | S_IWUSR);
 
 struct tegra_dc *tegra_dcs[TEGRA_MAX_DC];
 
 DEFINE_MUTEX(tegra_dc_lock);
+DEFINE_MUTEX(shared_lock);
 
 static inline int tegra_dc_fmt_bpp(int fmt)
 {
@@ -739,6 +748,21 @@ void tegra_dc_setup_clk(struct tegra_dc *dc, struct clk *clk)
 			clk_set_parent(clk, pll_d_out0_clk);
 	}
 
+	if (dc->out->type == TEGRA_DC_OUT_DSI) {
+		unsigned long rate;
+		struct clk *pll_d_out0_clk =
+			clk_get_sys(NULL, "pll_d_out0");
+		struct clk *pll_d_clk =
+			clk_get_sys(NULL, "pll_d");
+
+		rate = dc->mode.pclk;
+		if (rate != clk_get_rate(pll_d_clk))
+			clk_set_rate(pll_d_clk, rate);
+
+		if (clk_get_parent(clk) != pll_d_out0_clk)
+			clk_set_parent(clk, pll_d_out0_clk);
+	}
+
 	pclk = tegra_dc_pclk_round_rate(dc, dc->mode.pclk);
 	tegra_dvfs_set_rate(clk, pclk);
 }
@@ -833,6 +857,12 @@ tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg)
 {
 	unsigned int ctrl;
 
+	mutex_lock(&dc->lock);
+	if (!dc->enabled) {
+		mutex_unlock(&dc->lock);
+		return;
+	}
+
 	ctrl = ((cfg->period << PM_PERIOD_SHIFT) |
 		(cfg->clk_div << PM_CLK_DIVIDER_SHIFT) |
 		cfg->clk_select);
@@ -848,8 +878,9 @@ tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg)
 		break;
 	default:
 		dev_err(&dc->ndev->dev, "Error\n");
-		return;
+		break;
 	}
+	mutex_unlock(&dc->lock);
 }
 EXPORT_SYMBOL(tegra_dc_config_pwm);
 
@@ -934,7 +965,11 @@ static void tegra_dc_set_out(struct tegra_dc *dc, struct tegra_dc_out *out)
 	case TEGRA_DC_OUT_HDMI:
 		dc->out_ops = &tegra_dc_hdmi_ops;
 		break;
-
+#ifdef CONFIG_TEGRA_DSI
+	case TEGRA_DC_OUT_DSI:
+		dc->out_ops = &tegra_dc_dsi_ops;
+		break;
+#endif
 	default:
 		dc->out_ops = NULL;
 		break;
@@ -1090,6 +1125,12 @@ static void tegra_dc_set_color_control(struct tegra_dc *dc)
 		color_control |= DITHER_CONTROL_ORDERED;
 		break;
 	case TEGRA_DC_ERRDIFF_DITHER:
+		/* The line buffer for error-diffusion dither is limited
+		 * to 640 pixels per line. This limits the maximum
+		 * horizontal active area size to 640 pixels when error
+		 * diffusion is enabled.
+		 */
+		BUG_ON(dc->mode.h_active > 640);
 		color_control |= DITHER_CONTROL_ERRDIFF;
 		break;
 	}
@@ -1168,31 +1209,31 @@ static void tegra_dc_init(struct tegra_dc *dc)
 		tegra_dc_program_mode(dc, &dc->mode);
 }
 
-static bool _tegra_dc_enable(struct tegra_dc *dc)
+static void get_asus_projectID(){
+    if(asus_project_id == -1){
+        asus_project_id = ASUSGetProjectID();      
+    }
+}
+
+static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 {
-	printk("Disp: _tegra_dc_enable(id= %d) in+\n", dc->ndev->id);
+	printk("Disp: _tegra_dc_controller_enable(id= %d) in+\n", dc->ndev->id);
 
 	if (dc->ndev->id == 0) {
 		struct timeval t_resume;
 		int diff_msec = 0;
 
-		if (dc->mode.pclk == 0) {
-			printk("Disp: _tegra_dc_enable(id= %d) false out-\n", dc->ndev->id);
-			return false;
-		}
-
-		if (!dc->out) {
-			printk("Disp: _tegra_dc_enable(id= %d) false out2-\n", dc->ndev->id);
-			return false;
-		}
 		battery_charger_callback(false);
-		mxt_enable();
-		tegra_dc_io_start(dc);
-
+		get_asus_projectID();
+		if(asus_project_id > 100 && asus_project_id < 104)
+		    (*touch_enable_fp[asus_project_id - 101])();
+	
 		tegra_dc_setup_clk(dc, dc->clk);
-
 		clk_enable(dc->clk);
 		clk_enable(dc->emc_clk);
+		tegra_periph_reset_deassert(dc->clk);
+		msleep(10);
+
 		enable_irq(dc->irq);
 
 		tegra_dc_init(dc);
@@ -1231,28 +1272,26 @@ static bool _tegra_dc_enable(struct tegra_dc *dc)
 		msleep(210);
 		b_dc0_enabled = true;
 
-		printk("Disp: _tegra_dc_enable(id= %d) out-\n", dc->ndev->id);
+		printk("Disp: _tegra_dc_controller_enable(id= %d) out-\n", dc->ndev->id);
 		return true;
 	} else {
-		if (dc->mode.pclk == 0) {
-			printk("Disp: _tegra_dc_enable(id= %d) false out-\n", dc->ndev->id);
-			return false;
-		}
-
-		if (!dc->out) {
-			printk("Disp: _tegra_dc_enable(id= %d) false out2-\n", dc->ndev->id);
-			return false;
-		}
-
-		tegra_dc_io_start(dc);
+		/* 720p? or 1080p?*/
+		if ((dc->mode.h_active == 1920) && (dc->mode.v_active == 1080))
+			hdmi_resolution = HDMI_ACTIVE_1920_1080;
+		else if ((dc->mode.h_active == 1280) && (dc->mode.v_active == 720))
+			hdmi_resolution = HDMI_ACTIVE_1280_720;
+		else
+			hdmi_resolution = HDMI_ACTIVE_NONE;
 
 		if (dc->out->enable)
 			dc->out->enable();
 
 		tegra_dc_setup_clk(dc, dc->clk);
-
 		clk_enable(dc->clk);
 		clk_enable(dc->emc_clk);
+		tegra_periph_reset_deassert(dc->clk);
+		msleep(10);
+
 		enable_irq(dc->irq);
 
 		tegra_dc_init(dc);
@@ -1270,9 +1309,26 @@ static bool _tegra_dc_enable(struct tegra_dc *dc)
 		/* force a full blending update */
 		dc->blend.z[0] = -1;
 
-		printk("Disp: _tegra_dc_enable(id= %d) out-\n", dc->ndev->id);
+		printk("Disp: _tegra_dc_controller_enable(id= %d) out-\n", dc->ndev->id);
 		return true;
 	}
+}
+
+static bool _tegra_dc_enable(struct tegra_dc *dc)
+{
+	if (dc->mode.pclk == 0) {
+		printk("Disp: _tegra_dc_enable(id= %d) false out-\n", dc->ndev->id);
+		return false;
+	}
+
+	if (!dc->out) {
+		printk("Disp: _tegra_dc_enable(id= %d) false out2-\n", dc->ndev->id);
+		return false;
+	}
+
+	tegra_dc_io_start(dc);
+
+	return _tegra_dc_controller_enable(dc);
 }
 
 void tegra_dc_enable(struct tegra_dc *dc)
@@ -1285,9 +1341,9 @@ void tegra_dc_enable(struct tegra_dc *dc)
 	mutex_unlock(&dc->lock);
 }
 
-static void _tegra_dc_disable(struct tegra_dc *dc)
+static void _tegra_dc_controller_disable(struct tegra_dc *dc)
 {
-	printk("Disp: _tegra_dc_disable(id= %d) in+\n", dc->ndev->id);
+	printk("Disp: _tegra_dc_controller_disable(id= %d) in+\n", dc->ndev->id);
 
 	if (dc->ndev->id == 0) {
 		b_dc0_enabled = false;
@@ -1296,6 +1352,9 @@ static void _tegra_dc_disable(struct tegra_dc *dc)
 		msleep(210);
 
 		disable_irq(dc->irq);
+
+		if (dc->overlay)
+			tegra_overlay_disable(dc->overlay);
 
 		if (dc->out_ops && dc->out_ops->disable)
 			dc->out_ops->disable(dc);
@@ -1317,14 +1376,18 @@ static void _tegra_dc_disable(struct tegra_dc *dc)
 			dc->syncpt_min++;
 			nvhost_syncpt_cpu_incr(&dc->ndev->host->syncpt, dc->syncpt_id);
 		}
-
-		tegra_dc_io_end(dc);
-
-		if (mxt_disable() ==0)
-			battery_charger_callback(true);
+		
+		get_asus_projectID();
+		if(asus_project_id > 100 && asus_project_id < 104){
+		    if((*touch_disable_fp[asus_project_id - 101])() == 0)
+		        battery_charger_callback(true);
+		}
 
 	} else {
 		disable_irq(dc->irq);
+
+		if (dc->overlay)
+			tegra_overlay_disable(dc->overlay);
 
 		if (dc->out_ops && dc->out_ops->disable)
 			dc->out_ops->disable(dc);
@@ -1341,13 +1404,16 @@ static void _tegra_dc_disable(struct tegra_dc *dc)
 			dc->syncpt_min++;
 			nvhost_syncpt_cpu_incr(&dc->ndev->host->syncpt, dc->syncpt_id);
 		}
-
-		tegra_dc_io_end(dc);
 	}
 
-	printk("Disp: _tegra_dc_disable(id= %d) out-\n", dc->ndev->id);
+	printk("Disp: _tegra_dc_controller_disable(id= %d) out-\n", dc->ndev->id);
 }
 
+static void _tegra_dc_disable(struct tegra_dc *dc)
+{
+	_tegra_dc_controller_disable(dc);
+	tegra_dc_io_end(dc);
+}
 
 void tegra_dc_disable(struct tegra_dc *dc)
 {
@@ -1355,7 +1421,9 @@ void tegra_dc_disable(struct tegra_dc *dc)
 
 	if (dc->enabled) {
 		dc->enabled = false;
-		_tegra_dc_disable(dc);
+
+		if (!dc->suspended)
+			_tegra_dc_disable(dc);
 	}
 
 	switch_set_state(&dc->modeset_switch, 0);
@@ -1368,18 +1436,61 @@ static void tegra_dc_reset_worker(struct work_struct *work)
 	struct tegra_dc *dc =
 		container_of(work, struct tegra_dc, reset_work);
 
+	unsigned long val = 0;
+
 	dev_warn(&dc->ndev->dev, "overlay stuck in underflow state.  resetting.\n");
 
+	mutex_lock(&shared_lock);
 	mutex_lock(&dc->lock);
-	_tegra_dc_disable(dc);
 
-	msleep(100);
+	if (dc->enabled == false)
+		return;
+
+	dc->enabled = false;
+
+	/*
+	 * off host read bus
+	 */
+	val = tegra_dc_readl(dc, DC_CMD_CONT_SYNCPT_VSYNC);
+	val &= ~(0x00000100);
+	tegra_dc_writel(dc, val, DC_CMD_CONT_SYNCPT_VSYNC);
+
+	/*
+	 * set DC to STOP mode
+	 */
+	tegra_dc_writel(dc, DISP_CTRL_MODE_STOP, DC_CMD_DISPLAY_COMMAND);
+
+	msleep(10);
+
+	_tegra_dc_controller_disable(dc);
+
+	if (dc->ndev->id == 0 && tegra_dcs[1] != NULL) {
+		mutex_lock(&tegra_dcs[1]->lock);
+		disable_irq(tegra_dcs[1]->irq);
+	} else if (dc->ndev->id == 1 && tegra_dcs[0] != NULL) {
+		mutex_lock(&tegra_dcs[0]->lock);
+		disable_irq(tegra_dcs[0]->irq);
+	}
+
+	msleep(5);
+
 	tegra_periph_reset_assert(dc->clk);
-	msleep(100);
-	tegra_periph_reset_deassert(dc->clk);
+	msleep(2);
 
-	_tegra_dc_enable(dc);
+	if (dc->ndev->id == 0 && tegra_dcs[1] != NULL) {
+		enable_irq(tegra_dcs[1]->irq);
+		mutex_unlock(&tegra_dcs[1]->lock);
+	} else if (dc->ndev->id == 1 && tegra_dcs[0] != NULL) {
+		enable_irq(tegra_dcs[0]->irq);
+		mutex_unlock(&tegra_dcs[0]->lock);
+	}
+
+	/* _tegra_dc_enable deasserts reset */
+	_tegra_dc_controller_enable(dc);
+
+	dc->enabled = true;
 	mutex_unlock(&dc->lock);
+	mutex_unlock(&shared_lock);
 }
 
 static ssize_t switch_modeset_print_mode(struct switch_dev *sdev, char *buf)
@@ -1638,6 +1749,8 @@ static int tegra_dc_suspend(struct nvhost_device *ndev, pm_message_t state)
 	if (dc->enabled) {
 		tegra_fb_suspend(dc->fb);
 		_tegra_dc_disable(dc);
+
+		dc->suspended = true;
 	}
 	mutex_unlock(&dc->lock);
 
@@ -1651,6 +1764,8 @@ static int tegra_dc_resume(struct nvhost_device *ndev)
 	dev_info(&ndev->dev, "resume\n");
 
 	mutex_lock(&dc->lock);
+	dc->suspended = false;
+
 	if (dc->enabled)
 		_tegra_dc_enable(dc);
 

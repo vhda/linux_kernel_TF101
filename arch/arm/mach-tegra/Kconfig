@@ -11,6 +11,9 @@ config ARCH_TEGRA_2x_SOC
 	select ARM_GIC
 	select ARCH_REQUIRE_GPIOLIB
 	select ARM_ERRATA_742230
+	select USB_ARCH_HAS_EHCI if USB_SUPPORT
+	select USB_ULPI if USB_SUPPORT
+	select USB_ULPI_VIEWPORT if USB_SUPPORT
 	help
 	  Support for NVIDIA Tegra AP20 and T20 processors, based on the
 	  ARM CortexA9MP CPU and the ARM PL310 L2 cache controller
@@ -64,6 +67,13 @@ config TEGRA_SYSTEM_DMA
 	help
 	  Adds system DMA functionality for NVIDIA Tegra SoCs, used by
 	  several Tegra device drivers
+
+config TEGRA_SPI_SLAVE
+       tristate "Nvidia Tegra SPI slave driver"
+       depends on ARCH_TEGRA
+       select TEGRA_SYSTEM_DMA
+       help
+         SPI slave driver for NVIDIA Tegra SoCs
 
 config TEGRA_PWM
 	tristate "Enable PWM driver"
@@ -122,7 +132,21 @@ config ASUSEC
         bool "ASUS embedded controller interface"
         depends on I2C
 
+config DEBUG_ASUS
+	bool "For ASUS user-debug build"
+	depends on ARCH_TEGRA_2x_SOC
+	help
+	  Say Y here for user-debug build.
+
 config TEGRA_CLOCK_DEBUG_WRITE
 	bool "Enable debugfs write access to clock tree"
 	depends on DEBUG_FS
 	default n
+
+config TEGRA_MC_PROFILE
+	tristate "Enable profiling memory controller utilization"
+	default n
+	help
+	  When enabled, provides a mechanism to perform statistical
+	  sampling of the memory controller usage on a client-by-client
+	  basis, and report the log through sysfs.

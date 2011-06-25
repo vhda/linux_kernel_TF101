@@ -273,13 +273,24 @@ int mmc_add_card(struct mmc_card *card)
 
 	ret = device_add(&card->dev);
 	if (ret)
+	{
+		MMC_printk("%s: error %d", mmc_hostname(card->host), ret);
 		return ret;
+	}
 
 #ifdef CONFIG_DEBUG_FS
 	mmc_add_card_debugfs(card);
 #endif
 
 	mmc_card_set_present(card);
+
+#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
+	if(card->type == MMC_TYPE_SD)
+	{
+		mmc_set_bus_resume_policy(card->host, 1);
+		MMC_printk("%s: bus_resume_flags %x", mmc_hostname(card->host), card->host->bus_resume_flags);
+	}
+#endif
 
 	return 0;
 }

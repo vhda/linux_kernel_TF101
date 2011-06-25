@@ -40,8 +40,10 @@ struct pwm_bl_data {
 	struct pwm_device	*pwm;
 	struct device		*dev;
 	unsigned int		period;
+	unsigned int		lth_brightness;
 	int			(*notify)(struct device *,
 					  int brightness);
+	int			(*check_fb)(struct device *, struct fb_info *);
 };
 
 /* For power saving, the mapping between brightness & duty is modified as Non-Linear. */
@@ -56,7 +58,7 @@ static unsigned int asus_remapped_brightness[] = {
 	7140, 7395, 7395, 7395, 7395, 7650, 7650, 7650, 7650, 7905, 7905, 7905, 7905, 8160, 8160, 8160,
 	8160, 8415, 8415, 8415, 8415, 8670, 8670, 8670, 8670, 8925, 8925, 8925, 8925, 9180, 9180, 9180,
 	9180, 9435, 9435, 9435, 9435, 9690, 9690, 9690, 9690, 9945, 9945, 9945, 9945, 10200, 10200, 10200,
-	10200, 10455, 10455, 10455, 10710, 10710, 10710, 10965, 10965, 10965, 11220, 11220, 11220, 11475, 11475, 11475, 
+	10200, 10455, 10455, 10455, 10710, 10710, 10710, 10965, 10965, 10965, 11220, 11220, 11220, 11475, 11475, 11475,
 	11730, 11730, 11730, 11985, 11985, 11985, 12240, 12240, 12240, 12495, 12495, 12495, 12750, 12750, 12750, 13005,
 	13005, 13005, 13260, 13260, 13260, 13515, 13515, 13770, 13770, 14025, 14025, 14280, 14280, 14535, 14535, 14790,
 	14790, 15045, 15045, 15300, 15300, 15555, 15555, 15810, 15810, 16065, 16065, 16320, 16575, 16830, 17085, 17340,
@@ -150,8 +152,7 @@ static int pwm_backlight_update_status(struct backlight_device *bl)
 	}
 
 	if (brightness == 0) {
-		if (pb->notify)
-		{
+		if (pb->notify) {
 			/* ventana_backlight_notify(); */
 			brightness = pb->notify(pb->dev, brightness);
 		}
@@ -172,8 +173,7 @@ static int pwm_backlight_update_status(struct backlight_device *bl)
 			/* HSD: TP6= 10ms~ */
 			msleep(10);
 
-			if (pb->notify)
-			{
+			if (pb->notify) {
 				/* ventana_backlight_notify(); */
 				brightness = pb->notify(pb->dev, brightness);
 			}
@@ -187,9 +187,18 @@ static int pwm_backlight_get_brightness(struct backlight_device *bl)
 	return bl->props.brightness;
 }
 
+static int pwm_backlight_check_fb(struct backlight_device *bl,
+				  struct fb_info *info)
+{
+	struct pwm_bl_data *pb = dev_get_drvdata(&bl->dev);
+
+	return !pb->check_fb || pb->check_fb(pb->dev, info);
+}
+
 static const struct backlight_ops pwm_backlight_ops = {
 	.update_status	= pwm_backlight_update_status,
 	.get_brightness	= pwm_backlight_get_brightness,
+	.check_fb	= pwm_backlight_check_fb,
 };
 
 static int pwm_backlight_probe(struct platform_device *pdev)
@@ -220,6 +229,9 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 
 	pb->period = data->pwm_period_ns;
 	pb->notify = data->notify;
+	pb->check_fb = data->check_fb;
+	pb->lth_brightness = data->lth_brightness *
+		(data->pwm_period_ns / data->max_brightness);
 	pb->dev = &pdev->dev;
 
 	pb->pwm = pwm_request(data->pwm_id, "backlight");
