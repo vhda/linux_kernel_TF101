@@ -1606,7 +1606,7 @@ wl_iw_control_wl_off(
 {
 	int ret = 0;
 	wl_iw_t *iw;
-	mdelay(30);
+	mdelay(500);
 	WL_TRACE(("Enter %s\n", __FUNCTION__));
 
 	if (!dev) {

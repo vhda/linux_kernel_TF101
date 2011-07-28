@@ -1316,10 +1316,11 @@ static void usb_cable_detection(struct work_struct *w){
 #endif
 
 		ac_connected = false;
-                wake_unlock(&charger_info->wake_lock);
+		wake_unlock(&charger_info->wake_lock);
 	} else if (!charger_info->udc_vbus_active && charger_info->is_active) {
 		/* Determine whether it is a USB cable or a AC adapter, set the cable status and report it to 
 		the battery driver if necessary as well as control GPIO to set the charging current. */
+		wake_lock(&charger_info->wake_lock);
 		switch (fsl_readl(&dr_regs->portsc1) & PORTSCX_LINE_STATUS_BITS) {
 			case PORTSCX_LINE_STATUS_SE0:
 				ac_connected = false; break;
@@ -1336,7 +1337,6 @@ static void usb_cable_detection(struct work_struct *w){
 			printk(KERN_INFO "The USB cable is connected.\n");
 			charger_info->cable_status |= 1<<0; //0001
 			gpio_limit_set0_set(0);
-			wake_lock(&charger_info->wake_lock);
 		}else{
 			dock_in = gpio_get_value(TEGRA_GPIO_PX5);
 			ret = gpio_get_value(TEGRA_GPIO_PW1);

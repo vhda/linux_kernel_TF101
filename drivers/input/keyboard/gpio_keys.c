@@ -484,12 +484,12 @@ static irqreturn_t gpio_keys_isr(int irq, void *dev_id)
 				del_timer_sync(&power_key_timer);
 			}
 		}
-		if(!!old_state && !!state){
+		if(!old_state && (old_state==state)){
 			printk("  gpio_keys_isr send state 1 \n" );
 			input_event(input, type, button->code, 1);
 			input_sync(input);
 		}
-		old_state=state;
+		old_state=!!state;
 		printk(" type = %d, code = %d state =%x\n", button->type, button->code,state  );
 		input_event(input, type, button->code, !!state);
 		input_sync(input);
@@ -771,6 +771,7 @@ static int gpio_keys_resume(struct device *dev)
 			int irq = gpio_to_irq(button->gpio);
 			disable_irq_wake(irq);
 
+			#if 0
 			if ((wakeup_key == button->code) && (wakeup_key == KEY_POWER)) {
 				unsigned int type = button->type;
 
@@ -778,6 +779,7 @@ static int gpio_keys_resume(struct device *dev)
 				input_event(ddata->input, type, button->code, 0);
 				input_sync(ddata->input);
 			}
+			#endif
 		}
 
 		gpio_keys_report_event(&ddata->data[i]);
