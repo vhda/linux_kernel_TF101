@@ -811,7 +811,7 @@ static int asusec_kp_key_mapping(int x)
 {
 	switch (x){
 		case ASUSEC_KEYPAD_ESC:
-			return KEY_BACK; 
+			return KEY_ESC; 
 
 		case ASUSEC_KEYPAD_KEY_WAVE:
 			return KEY_GRAVE;
@@ -985,7 +985,7 @@ static int asusec_kp_key_mapping(int x)
 			return KEY_DOWN;
 
 		case ASUSEC_KEYPAD_RIGHTWIN:
-			return KEY_SEARCH;
+			return KEY_LEFTALT;
 
 		case ASUSEC_KEYPAD_LEFTCTRL:
 			return KEY_LEFTCTRL;
