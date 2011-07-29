@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux kernel version: 2.6.36.4
-# Fri Jul 29 15:17:21 2011
+# Fri Jul 29 16:25:04 2011
 #
 CONFIG_ARM=y
 CONFIG_HAVE_PWM=y
@@ -2214,7 +2214,7 @@ CONFIG_IIO=y
 # CONFIG_ADIS16255 is not set
 # CONFIG_LIRC_STAGING is not set
 # CONFIG_EASYCAP is not set
-# CONFIG_RIL is not set
+CONFIG_RIL=y
 
 #
 # File systems
