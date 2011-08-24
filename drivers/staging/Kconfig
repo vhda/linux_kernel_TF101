@@ -43,7 +43,7 @@ if !STAGING_EXCLUDE_BUILD
 
 source "drivers/staging/et131x/Kconfig"
 
-source "drivers/staging/brcm80211/Kconfig"
+
 
 source "drivers/staging/slicoss/Kconfig"
 

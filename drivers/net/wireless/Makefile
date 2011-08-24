@@ -54,3 +54,6 @@ obj-$(CONFIG_WL12XX)	+= wl12xx/
 obj-$(CONFIG_IWM)	+= iwmc3200wifi/
 
 obj-$(CONFIG_BCM4329)	+= bcm4329/
+obj-$(CONFIG_BRCMFMAC) += brcm80211/
+obj-$(CONFIG_BRCMUMAC) += brcm80211/
+obj-$(CONFIG_BRCMSMAC) += brcm80211/
