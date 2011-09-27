@@ -17,7 +17,6 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
-#include <linux/printk.h>
 #include <linux/pci_ids.h>
 #include <linux/netdevice.h>
 #include <linux/interrupt.h>

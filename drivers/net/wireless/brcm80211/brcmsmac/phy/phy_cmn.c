@@ -177,7 +177,7 @@ int phy_getintvar(struct brcms_phy *pi, const char *name)
 	unsigned long res;
 
 	val = PHY_GETVAR(pi, name);
-	if (val && !kstrtoul(val, 0, &res))
+	if (val && !strict_strtoul(val, 0, &res))
 		return res;
 
 	return 0;

@@ -94,8 +94,7 @@ static s32 brcmf_cfg80211_config_default_mgmt_key(struct wiphy *wiphy,
 						 struct net_device *dev,
 						 u8 key_idx);
 static s32 brcmf_cfg80211_resume(struct wiphy *wiphy);
-static s32 brcmf_cfg80211_suspend(struct wiphy *wiphy,
-				 struct cfg80211_wowlan *wow);
+static s32 brcmf_cfg80211_suspend(struct wiphy *wiphy);
 static s32 brcmf_cfg80211_set_pmksa(struct wiphy *wiphy, struct net_device *dev,
 				   struct cfg80211_pmksa *pmksa);
 static s32 brcmf_cfg80211_del_pmksa(struct wiphy *wiphy, struct net_device *dev,
@@ -2113,8 +2112,7 @@ static s32 brcmf_cfg80211_resume(struct wiphy *wiphy)
 	return 0;
 }
 
-static s32 brcmf_cfg80211_suspend(struct wiphy *wiphy,
-				  struct cfg80211_wowlan *wow)
+static s32 brcmf_cfg80211_suspend(struct wiphy *wiphy)
 {
 	struct brcmf_cfg80211_priv *cfg_priv = wiphy_to_cfg(wiphy);
 	struct net_device *ndev = cfg_to_ndev(cfg_priv);
@@ -2460,7 +2458,7 @@ static s32 brcmf_inform_single_bss(struct brcmf_cfg80211_priv *cfg_priv,
 	else
 		band = wiphy->bands[IEEE80211_BAND_5GHZ];
 
-	freq = ieee80211_channel_to_frequency(channel, band->band);
+	freq = ieee80211_channel_to_frequency(channel);
 	notify_channel = ieee80211_get_channel(wiphy, freq);
 
 	notify_timestamp = jiffies_to_msecs(jiffies)*1000; /* uSec */
@@ -2536,7 +2534,7 @@ static s32 wl_inform_ibss(struct brcmf_cfg80211_priv *cfg_priv,
 	else
 		band = wiphy->bands[IEEE80211_BAND_5GHZ];
 
-	freq = ieee80211_channel_to_frequency(channel, band->band);
+	freq = ieee80211_channel_to_frequency(channel);
 	notify_channel = ieee80211_get_channel(wiphy, freq);
 
 	notify_timestamp = jiffies_to_msecs(jiffies)*1000; /* uSec */
@@ -2909,8 +2907,7 @@ brcmf_bss_roaming_done(struct brcmf_cfg80211_priv *cfg_priv,
 	else
 		band = wiphy->bands[IEEE80211_BAND_5GHZ];
 
-	freq = ieee80211_channel_to_frequency(channel.target_channel,
-						band->band);
+	freq = ieee80211_channel_to_frequency(channel.target_channel);
 	notify_channel = ieee80211_get_channel(wiphy, freq);
 
 	cfg80211_roamed(ndev, notify_channel,

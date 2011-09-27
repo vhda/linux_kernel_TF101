@@ -4358,13 +4358,13 @@ int brcms_b_attach(struct brcms_c_info *wlc, u16 vendor, u16 device, uint unit,
 	 * SDIO_BUS, and SROMless devices on PCI_BUS.
 	 */
 	var = getvar(vars, "vendid");
-	if (var && !kstrtoul(var, 0, &res)) {
+	if (var && !strict_strtoul(var, 0, &res)) {
 		vendor = (u16)res;
 		wiphy_err(wiphy, "Overriding vendor id = 0x%x\n",
 			  vendor);
 	}
 	var = getvar(vars, "devid");
-	if (var && !kstrtoul(var, 0, &res)) {
+	if (var && !strict_strtoul(var, 0, &res)) {
 		u16 devid = (u16)res;
 		if (devid != 0xffff) {
 			device = devid;
@@ -9806,7 +9806,7 @@ int getintvar(char *vars, const char *name)
 	unsigned long res;
 
 	val = getvar(vars, name);
-	if (val && !kstrtoul(val, 0, &res))
+	if (val && !strict_strtoul(val, 0, &res))
 		return res;
 
 	return 0;

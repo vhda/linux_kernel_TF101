@@ -830,7 +830,7 @@ static int brcmf_c_pattern_atoh(char *src, char *dst)
 		char num[3];
 		strncpy(num, src, 2);
 		num[2] = '\0';
-		if (kstrtoul(num, 16, &res))
+		if (strict_strtoul(num, 16, &res))
 			return -EINVAL;
 		dst[i] = (u8)res;
 		src += 2;
@@ -880,7 +880,7 @@ brcmf_c_pktfilter_offload_enable(struct brcmf_pub *drvr, char *arg, int enable,
 
 	/* Parse packet filter id. */
 	enable_parm.id = 0;
-	if (!kstrtoul(argv[i], 0, &res))
+	if (!strict_strtoul(argv[i], 0, &res))
 		enable_parm.id = (u32)res;
 
 	/* Parse enable/disable value. */
@@ -961,7 +961,7 @@ void brcmf_c_pktfilter_offload_set(struct brcmf_pub *drvr, char *arg)
 
 	/* Parse packet filter id. */
 	pkt_filter.id = 0;
-	if (!kstrtoul(argv[i], 0, &res))
+	if (!strict_strtoul(argv[i], 0, &res))
 		pkt_filter.id = (u32)res;
 
 	if (NULL == argv[++i]) {
@@ -971,7 +971,7 @@ void brcmf_c_pktfilter_offload_set(struct brcmf_pub *drvr, char *arg)
 
 	/* Parse filter polarity. */
 	pkt_filter.negate_match = 0;
-	if (!kstrtoul(argv[i], 0, &res))
+	if (!strict_strtoul(argv[i], 0, &res))
 		pkt_filter.negate_match = (u32)res;
 
 	if (NULL == argv[++i]) {
@@ -981,7 +981,7 @@ void brcmf_c_pktfilter_offload_set(struct brcmf_pub *drvr, char *arg)
 
 	/* Parse filter type. */
 	pkt_filter.type = 0;
-	if (!kstrtoul(argv[i], 0, &res))
+	if (!strict_strtoul(argv[i], 0, &res))
 		pkt_filter.type = (u32)res;
 
 	if (NULL == argv[++i]) {
@@ -991,7 +991,7 @@ void brcmf_c_pktfilter_offload_set(struct brcmf_pub *drvr, char *arg)
 
 	/* Parse pattern filter offset. */
 	pkt_filter.u.pattern.offset = 0;
-	if (!kstrtoul(argv[i], 0, &res))
+	if (!strict_strtoul(argv[i], 0, &res))
 		pkt_filter.u.pattern.offset = (u32)res;
 
 	if (NULL == argv[++i]) {
