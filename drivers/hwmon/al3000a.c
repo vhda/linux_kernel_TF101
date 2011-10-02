@@ -464,7 +464,9 @@ static struct attribute *al3000a_attr[] = {
 
 static irqreturn_t al3000a_interrupt_handler(int irq, void *dev_id)
 {
+	#ifdef DEBUG
 	printk("Light sensor: %s\n", __FUNCTION__);
+	#endif
 	struct al3000a_data * data= dev_id;
 
 	schedule_work(&data->work);
@@ -487,7 +489,9 @@ static void al3000a_work(struct work_struct *work)
 	else{
 		count = count & 0x3F;
 		data->lux = lux_table[count];
+		#ifdef DEBUG
 		printk("lux value is : %d \n", data->lux);
+		#endif
 	}
 }
 
