@@ -575,7 +575,9 @@ static int bq20z45_get_psp(int reg_offset, enum power_supply_property psp,
 	    ret <= bq20z45_data[reg_offset].max_value) {
 		val->intval = ret;
 		if (psp == POWER_SUPPLY_PROP_VOLTAGE_NOW) {
+			#ifdef DEBUG
 			printk("bq20z45_get_psp voltage_now =%u\n",val->intval );//4
+			#endif
 			}
 		if (psp == POWER_SUPPLY_PROP_STATUS) {
 			/* mask the upper byte and then find the
@@ -599,13 +601,17 @@ static int bq20z45_get_psp(int reg_offset, enum power_supply_property psp,
 					}
 			else
 				charge_ic_enable(false);
+			#ifdef DEBUG
                        printk("bq20z45_get_psp val->intval =%s ret =%x charging=%x\n",status_text[val->intval] ,ret ,!(ret & BATTERY_CHARGING) );//4
+			#endif
 		}
 		else if (psp == POWER_SUPPLY_PROP_TEMP) {
 			  ret -=TEMP_KELVIN_TO_CELCIUS;
 			  bq20z45_device->old_temperature=val->intval = ret;
 			 bq20z45_device->temp_err=0;
+			#ifdef DEBUG
 			  printk("bq20z45_get_psp  temp=%u\n",ret );
+			#endif
 		}
 	} else {
 		val->intval = 0;
@@ -656,7 +662,9 @@ static int bq20z45_get_capacity(union power_supply_propval *val)
 
 	bq20z45_device->old_capacity=val->intval;
 	bq20z45_device->cap_err=0;
+	#ifdef DEBUG
 	printk("bq20z45_get_capacity val->intval=%u ret=%u\n",val->intval,ret,bq20z45_device->low_battery_present?"low battery event":" ");
+	#endif
 	return 0;
 }
 static int bq20z45_get_property(struct power_supply *psy,
